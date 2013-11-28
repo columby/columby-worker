@@ -1,0 +1,15 @@
+.log {
+  height: 500px;
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid #eee;
+  font-size: 0.8em;
+}
+
+.log .message {
+  color: #aaa; 
+}
+.log .newMessage {
+  color: red; 
+  font-weight: bold;
+}

@@ -89,7 +89,7 @@ function check_queue(){
   if ($conn) {
     // We already checked for processing above, is this secure??? 
     // Set old items still set to processing=0
-    message("Setting all items to processing=0"); 
+    message("Setting all items to processing=0", "nolog"); 
     $q = mysql_query("UPDATE columby_queue SET processing=0 WHERE processing=1",$conn);
 
     // check to see if there is (more than) 1 item in the queue for processing
@@ -105,10 +105,10 @@ function check_queue(){
     //$q = mysql_query("UPDATE columby_queue SET processing=0, done=1, error='Aborted because of new job. ' WHERE UUID='$uuid' AND done=0 ORDER BY ID ASC OFFSET 1",$conn);
 
     if ($count > 0) {
-      message("There are items to be processed: $count");
+      message("There are items to be processed: $count", "nolog");
       return TRUE;
     } else {
-      message("There are no items to be processed. ");
+      message("There are no items to be processed. ", "nolog");
     }
   }
 
@@ -120,6 +120,9 @@ function check_queue(){
 function message($message,$service="log"){
 
   switch ($service){
+    case "nolog":
+      echo date('c')." - ".$message."\n";
+    break;
     case "log":
       echo date('c')." - ".$message."\n";
 

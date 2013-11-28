@@ -699,6 +699,19 @@ class scraper {
    *   array with file details (path, name)
    **/
   function create_csv_file() {
+    /*
+    cd /usr/local/pgsql
+    mkdir csv
+    chown postgres csv
+    chmod 755 csv
+    ls -la
+    
+    COPY tablename
+    TO '/usr/local/pgsql/data/csv/header_export.csv'
+    WITH DELIMITER ‘,’
+    CSV HEADER
+    */
+    
     // create a tmp file
     //$file = fopen("home/arn/www/sites/default/files/datasets/tmp/$uuid_tmp.csv", "w"); 
     // add headers

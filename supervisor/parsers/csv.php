@@ -12,6 +12,9 @@ class csv {
   private $tablename;   // 
   private $datafile_uri;    // uri to storage of datafile
   private $wkt_column;  // reference to the column number with the wkt_values
+  // Variable to know if there is a processing error;  
+  private $processing_error;  
+
 
   function __construct($_q){
 
@@ -155,6 +158,7 @@ class csv {
             message("Processed 500 lines.");
 
             $this->dbq_send($sqls);   // error checking? 
+            
             // reset
             $sqls = []; 
 

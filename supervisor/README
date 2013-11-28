@@ -1,6 +1,12 @@
-#Columby worker Supervisor process
+#Columby worker
 
 ## Description
+Columby Worker is the background processor for Columby. The worker runs continuously and checks on a regular interval if there are tasks to be performed. 
+
+## Tasks 
+Currently the worker has the task of processing uploaded data. 
+### Task: Data processing
+
 
 
 ## Process overview
