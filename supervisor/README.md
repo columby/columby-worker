@@ -15,8 +15,13 @@ run.php calls for check_queue every minute
   	Render() processes the item. 
 
 
+## Worker log
+The worker sends log messages to the columby_worker_log table. 
 
-## Table description
+
+## Database stuff 
+
+### Table description
 ID					: primary key for this table
 UUID				: uuid for this dataset (drupal-node and tablename)
 type				: type of upload (currently csv and arcgis)
@@ -34,3 +39,5 @@ split 				: ??
 stats 				: statistics of service
 createdAt			: timestamp of creation
 updatedAt			: timestamp of last update
+
+

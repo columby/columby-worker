@@ -2,35 +2,55 @@
 
 /** 
  * CSV Processor Class
+ *
  **/
 class csv {
 
-  private $q;           // incoming question
-  private $connection;  // connection to drupal database
-  private $id;          // id of queue item
-  private $uuid;        // uuid of dataset node
-  private $tablename;   // 
-  private $datafile_uri;    // uri to storage of datafile
-  private $wkt_column;  // reference to the column number with the wkt_values
-  // Variable to know if there is a processing error;  
-  private $processing_error;  
+  public $job_log;       // job processing log
+  public $job_errorlog;  // job processing error log
 
+  private $job;           // incoming job item
+  private $processed_job; // processed job data
+  
+  private $connection;    // connection to drupal database
+  private $tablename;     // name of postgis database table
+  private $datafile_uri;  // uri to storage of datafile
+  private $wkt_column;    // reference to the column number with the wkt_values
+  private $id;            // reference of current job id
 
-  function __construct($_q){
+  /** 
+   * Construct the CSV Processor
+   *
+   * @param $job Array with job properties
+   *
+   * @return $processed_job Array with processed job properties
+   * 
+   **/
+  function __construct($job){
 
-    message("CSV: Starting a new csv item."); 
+    $this->job_log = array(); 
+    $this->job_errorlog = array(); 
 
+    message("CSV: Starting the process of a new CSV file.");
+    $this->job_log[] = date('c').";CSV: Starting the process of a new CSV file."; 
+    
     $this->connection = drupal_connect();
     message("CSV: Connected to database: $this->connection");
-    $this->q = $_q; 
-    $this->uuid = $_q->array['uuid']; 
-    $uuid = $this->uuid;
-    message("CSV: Fetching data for uuid: $this->uuid");
-    $this->id = $_q->array['ID']; 
-    message("CSV: Fetching data for queue id: $this->id");
-    $this->tablename = "c".str_replace("-", "_", $this->uuid); 
-    message("CSV: Fetching data for tablename: $this->tablename");
+    $this->job_log[] = date('c').";CSV: Connected to database: $this->connection";
     
+    $this->job = $job; 
+    $this->tablename = "c".str_replace("-", "_", $job['uuid']); 
+    $this->id = $job['ID'];
+    $uuid = $job['uuid'];
+
+    message("CSV: Fetching data for uuid: " . $job['uuid']);
+    $this->job_log[] = date('c').";CSV: Fetching data for uuid: " . $job['uuid'];
+    message("CSV: Fetching data for queue id: " . $job['ID']);
+    $this->job_log[] = date('c').";CSV: Fetching data for queue id: " . $job['ID'];
+    message("CSV: Fetching data for tablename: " . $this->tablename);
+    $this->job_log[] = date('c').";CSV: Fetching data for tablename: " . $this->tablename;
+    
+    // Fetch required data from CMS
     $sql = "SELECT 
       n.uuid,
       n.nid,
@@ -39,210 +59,204 @@ class csv {
       FROM node n
       LEFT JOIN field_data_field_file ON n.nid = field_data_field_file.`entity_id`
       LEFT JOIN file_managed ON field_data_field_file.`field_file_fid` = file_managed.`fid`
-      WHERE n.uuid = '$uuid'";
-    $result = mysql_query($sql,$this->connection);
+      WHERE n.uuid = '$uuid'
+      LIMIT 1;";
+
+    $result = mysql_query($sql, $this->connection);
     
-    while ($row = mysql_fetch_assoc($result)) {
-      //message("******* *******");
-      message(print_r($row));
-      $this->datafile = $row["uri"]; 
-      // change drupal's public:// to http sitename
-      $this->datafile = str_replace('public://', '/home/columby/www/live/sites/default/files/', $this->datafile);
-      message("CSV: Starting the process of node with uuid $this->tablename and datafile: $this->datafile");
-    }
-    
-    if(empty($this->datafile)){
-      $this->dbq_put('error', 'The file that should be processed is empty or doesn\'t exist'); 
-      message("CSV: The file that should be processed is empty or doesn't exist. ($this->uuid)");
+    // Process results
+    if (!$result) {
+      $this->job_errorlog[] = date('c').';Error Fetching data from CMS: ' . mysql_error();
     } else {
-      message("CSV: Starting the process of file $this->datafile. ($this->uuid)");
-      // start processing the csv-file
-      $this->dbq_go();
+      $row = mysql_fetch_assoc($result);
+      $this->job_log[] = date('c').";Fetched data: " . print_r($row);
+      $this->datafile_uri = $row["uri"]; 
+      
+      // change drupal's public:// to http sitename
+      // how to get public directory? 
+      $this->datafile_uri = str_replace('public://', '/home/columby/www/columby.dev/sites/default/files/', $this->datafile_uri);
+      $this->job_log[] = date('c').";CSV: Starting the process of node with uuid $this->tablename and datafile: " . $this->datafile_uri;
+      
+      if(empty($this->datafile_uri)){
+        $this->job_errorlog[] = date('c').";The reference to the file that should be processed is empty. "; 
+      } else {
+        // start processing the csv-file
+        $this->process();
+      }
     }
+
+    // update queue item
+    if (count($this->processed_job['job_errorlog']) > 0) {
+      $e = implode(', ', $this->processed_job['job_errorlog']);
+      $this->update_queue('error', $e);
+      $this->update_queue('done', "1");
+      $this->update_queue('processing', "0");
+    }
+
+    // Return job processing info
+    $this->processed_job = array();
+    $this->processed_job['job'] = $this->job; 
+    $this->processed_job['job_log'] = $this->job_log; 
+    $this->processed_job['job_errorlog'] = $this->job_errorlog;
+
+    return TRUE;
   }
 
 
   /**
-   * 
    * Process the csv-file
    *
    **/
-  function dbq_go(){
+  function process(){
     
-    message("Starting the process of file $this->datafile. ($this->uuid)");
+    $this->job_log[] = date('c').";Starting the process of file " . $this->datafile_uri;
+    
     $max_line_length = 10000;
     
     // Open the file for reading
-    if (($handle = fopen("$this->datafile", 'r')) !== FALSE) {
-      message("File opened ($this->datafile)");
+    if (($handle = fopen("$this->datafile_uri", 'r')) !== FALSE) {
+      $this->job_log[] = date('c').";File opened";
 
-      // message("create table $tablename"). 
-      // If table already existed then it was removed in the render() function
+      $file = new SplFileObject($this->datafile_uri);
       
-      $file = new SplFileObject($this->datafile);
       $delimiter = $file->getCsvControl();
-      message("Processing CSV with delimiter: " . $delimiter[0]);
+      $this->job_log[] = date('c').";Processing CSV with delimiter: " . $delimiter[0];
+      
       $columns = fgetcsv($handle, $max_line_length, $delimiter[0]);
-      message("processed first line: ");
-      message(print_r($columns));
+      $this->job_log[] = date('c').";processed first line: " . print_r($columns);
       $columns = $this->sanitize_columns($columns); 
       
       $column_types = array();
 
       // check for WKT values
+      // in_array, strtolower
       for ($k=0; $k<count($columns); $k++) {
         if ( ($columns[ $k] == 'WKT') || ($columns[ $k] == 'wkt') ){
           $this->wkt_column = $k; 
-          message("Found a wkt geometry column: $this->wkt_column.");
+          $this->job_log[] = date('c').";Found a wkt geometry column: $this->wkt_column.";
         }
       }
       
-      // remove wkt from sql insert statement
+      // remove wkt from sql insert statement (processed as the_geom)
       unset ($columns[ $this->wkt_column]); 
 
       $s = join(" text,", $columns); 
-      message("sql: " . $s);
+      $s .= " text";
 
-      $sql="CREATE TABLE $this->tablename (cid serial PRIMARY KEY, $s text, the_geom geometry, date_created timestamp, date_updated timestamp);";      
-      message("Creating table: $sql"); 
+      $sql="CREATE TABLE $this->tablename (cid serial PRIMARY KEY, $s, the_geom geometry, date_created timestamp, date_updated timestamp);";      
+      $this->job_log[] = "Creating table: $sql";  
 
-      $pgResult = pgq($sql);
+      $pgResult = postgis_query($sql);
       
       if ($pgResult) {
-        message("Created table $sql, $pgResult");
+        $this->job_log[] = date('c').";Created table $sql, $pgResult";
       
         // Create a sql statement to work with
         $sql_pre = '';
-        // Counter for rows
+        $sqls = []; 
+
+        // Counter for rows (and is cid)
         $i = 1;
 
-        // get the data from the csv, read each line. 
-        // Process the file in chunks of 500 lines
-        message("Starting data processing.");
+        $this->job_log[] = date('c').";Starting data processing. ";
+
         while(($datarow = fgetcsv($handle, $max_line_length, ',')) !== FALSE) {
           
-          $sql_pre = "";
-          // add cid (columby unique id)
-          $sql_pre .= "(". $i . ",";
-          //save wkt value for later processing
-          if ($this->wkt_column) {
-            $wkt = $datarow[ $this->wkt_column]; 
-            unset($datarow[ $this->wkt_column]); 
-            //echo ('*** found wkt: $wkt'); 
-          } else {
-            //echo ('*** NOT found wkt.');  
-          }
-          
+          // Create the right sql statement based on data in the received row
+          $sql = $this->prepare_sql_statement($i, $datarow); 
 
-          // put all columns except wkt in the sql
-          foreach ($datarow as $field) {
-            $sql_pre .= "'" . pg_escape_string($field) . "',"; 
-          }
-
-          // add the_geom from WKT
-          if (isset($wkt)) {
-            //echo(' **** Setting geom from tekst: $wkt' . pg_escape_string($wkt)); 
-            $sql_pre .= " ST_GeomFromText('" . pg_escape_string($wkt) . "', -1),"; 
-          } else {
-            $sql_pre .= " NULL,";
-          }
-          // Add dates
-          $sql_pre .=  "'".date('Y-m-d H:i:s') . "','" . date('Y-m-d H:i:s') . "') "; 
-          
-          //echo (date('c') . " - dbq_go: data: $sql_pre \n");
           // Add the single SQL-lines to an array
-          $sqls[] = $sql_pre;
+          $sqls[] = $sql;
         
           // Create an sql statement for 500 rows. 
           if(count($sqls) > 500){
-            message("Processed 500 lines.");
-
-            $this->dbq_send($sqls);   // error checking? 
-            
-            // reset
+            $this->job_log[] = date('c').";Processed 500 lines, sending data. ";
+            $this->send($sqls);
             $sqls = []; 
 
-            message("Processed lines.");
-            $this->q->put("processed", $i);
+            $this->update_queue("processed", $i);
           }
 
           $i++;
         }
-      
-        message("Processed final lines.");
         
-        $processed = $this->dbq_send($sqls);  // error checking? 
-        // reset
-        $sqls = []; 
-      
-        if ($processed) {
-          message("Finished processing final lines.");
-          $this->dbq_put("processing","0");
-          $this->dbq_put("done","1");
-        } else { 
-          message("Error finishing processing final lines!");
-        }
-      } else {
-        message("No connection to postgis!");
+        $this->job_log[] = date('c').";Sending final " . count($sqls) . " lines. ";
+        $this->send($sqls);
+        $this->update_queue("processed", $i);
 
+        $this->job_log[] = date('c').";Finished data processing. ";
+        $this->update_queue("processing","0");
+        $this->update_queue("done","1");
+
+      } else {
+        $this->job_errorlog[] = date('c').";No connection to postgis!";
       }
     } else {
-      $e=print_r(error_get_last());
-      message(print_r($e)); 
-      message("An error occured reading the file.");
-      $this->dbq_put('error', print_r($e));
-      $this->dbq_put('done', "1");
-      $this->dbq_put('processing', "0");
+      $this->job_errorlog[] = print_r(error_get_last());
     }
   }
   
-  function dbq_send($sqls) {
+  /**
+   * Send data to the database
+   * 
+   * @param $sqls array of sql queries
+   * 
+   **/
+  function send($sqls) {
 
-    echo (date('c') . " - dbq_send - Sending data to: $this->tablename \n"); 
+    message("Sending data to: $this->tablename", "nolog"); 
     $sql_pre = join($sqls,", ");
-    //echo (date('c') . " - dbq_send - sqldata: $sql_pre \n"); 
     $sql = "INSERT INTO $this->tablename VALUES $sql_pre;";
     $sql_pre = "";
-    //echo (date('c') . " - dbq_send - Sending data: $sql \n"); 
-
+    
     // send the query
     // pgq returned false of result; 
-    $pgResult = pgq($sql);
-    echo (date('c') . " - dbq_send - Send result: $pgResult \n"); 
+    $pgResult = postgis_query($sql);
+    message('Send result: $pgResult','nolog'); 
 
     // Check results
     if ($pgResult) {
-      echo (date('c') . " - dbq_send - Send success! \n"); 
-      //$this->q->put("split",$i);
-      //$this->q->put("total",$i); // is dit nodig? 
-      //$this->q->put("processed",100); 
+      message('Send success!','nolog'); 
     } else {
-      echo (date('c') . " - dbq_send - Error sending the query: $sql\n"); 
+      message('Error sending the query: $sql','nolog'); 
       $error = pg_last_error(); 
       $escaped = addslashes($error); 
-      echo("#### escaped: " . $escaped);
       $this->dbq_put('error', $escaped);
     }
 
     return $pgResult; 
   }
 
-  function dbq_put($col,$val){
+  /**
+   * Update the queue item
+   * 
+   * @param $col 
+   * @param $val
+   * 
+   **/
+  function update_queue($col, $val) {
 
     $conn = $this->connection; 
     $id = $this->id; 
     $val = addslashes($val); 
     $sql = "UPDATE columby_queue SET $col='$val' WHERE ID=$id"; 
-    echo (date('c') . " - setting queue item: $sql \n"); 
+    message('Setting queue item: $sql','nolog'); 
+    $this->job[$col] = $val; 
     $q = mysql_query($sql, $conn); 
-    $this->q->array[$col] = $val; 
     if (!$q) {
-      echo (date('c') . " - error: ".mysql_error()."\n"); 
+      message('Error: '.mysql_error(),'nolog'); 
     } else {
-      echo (date('c') . " - item written to queue-table ($col: $val) \n");  
+      message('Item written to queue-table ($col: $val)','nolog');  
     }
   }
 
+
+  /************* HELPER FUNCTIONS *****************/
+
+  /** 
+   * Sanitize columns for postGIS database
+   * 
+   **/
   function sanitize_columns($columns) {
     $fields = array(); 
     foreach ($columns as $field) {
@@ -253,5 +267,42 @@ class csv {
       $fields[]=$field;
     }
     return $fields;
+  }
+
+  /** 
+   * Prepare the sql row statement
+   * 
+   * @param
+   *
+   * @return
+   *
+   **/
+  function prepare_sql_statement($cid, $row) {
+    $sql = ''; 
+
+    $sql = "";
+    // add cid (columby unique id)
+    $sql .= "(". $cid . ",";
+
+    //save wkt value for later processing
+    if ($this->wkt_column) {
+      $wkt = $row[ $this->wkt_column]; 
+      unset($row[ $this->wkt_column]); 
+    }
+
+    // put all columns except wkt in the sql
+    foreach ($row as $field) { $sql .= "'" . pg_escape_string($field) . "',"; }
+
+    // add the_geom from WKT
+    if (isset($wkt)) {
+      $sql .= " ST_GeomFromText('" . pg_escape_string($wkt) . "', -1),"; 
+    } else {
+      $sql .= " NULL,";
+    }
+
+    // Add dates
+    $sql .=  "'".date('Y-m-d H:i:s') . "','" . date('Y-m-d H:i:s') . "') "; 
+          
+    return $sql; 
   }
 }

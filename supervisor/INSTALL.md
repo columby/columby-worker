@@ -8,21 +8,45 @@
 The supervisor package from the debian repository does not seem to work properly. Better to use easy_install. Reference: http://edvanbeinum.com/how-to-install-and-configure-supervisord/
 
     $ sudo apt-get install python-setuptools
-    $ sudo easy_install supervisor
+    $ sudo easy_install pip
+    $ sudo pip install supervisor
     $ sudo su root
     $ echo_supervisord_conf > /etc/supervisord.conf
-    $ sudo nano /etc/supervisor/supervisord.conf
-  
-    [inet_http_server]
-    port=*:9001
-    username = user
-    password = pass
+    $ exit
+    $ sudo nano /etc/supervisord.conf
+
+	    chmod=0777 ;???
+	    chown=columby:www-data ;???
+	    logfile=/var/log/supervisor/supervisord.log
+	    logfile_maxbytes=20MB
+	    logfile_backups=50
+	    
+	    [inet_http_server]
+	    port=*:9001
+	    username = user
+	    password = pass
+	    
+	    [include]
+	    files = /etc/supervisor/conf.d/*.conf  
+	    
+	$ sudo mkdir /var/log/supervisor
+	$ sudo mkdir /var/log/supervisor/columby_worker
+	$ sudo mkdir /etc/supervisor
+	$ sudo mkdir /etc/supervisor/conf.d
+	$ sudo nano /etc/supervisor/conf.d/columby_worker.conf
+	    Copy columby_worker.conf file contents
+		  
+	
 
 Open the Firewall for this port
 
     $ sudo ufw allow 9001/tcp
 
 Init.d script for starting and stopping: 
+    
+    $ sudo nano /etc/init.d/supervisord
+
+    
     #! /bin/bash -e
   
     SUPERVISORD=/usr/local/bin/supervisord
@@ -61,6 +85,7 @@ Init.d script for starting and stopping:
     esac
   
     exit 0
+    
  Update file
 
     $ sudo chmod +x /etc/init.d/supervisord  
@@ -69,6 +94,12 @@ Init.d script for starting and stopping:
 
 ## Configuration
   1. Copy the configuration file:  
-     /etc/supervisor/conf.d/columby_worker.conf
+    /etc/supervisor/conf.d/columby_worker.conf
   2. Copy the worker files (all files inside the supervisor folder): 
-     cp /home/columby/hub/extras/columby_worker_supervisor/* /home/columby/columby_worker/ -r
+    cp /home/columby/hub/extras/columby_worker_supervisor/* /home/columby/columby_worker/ -r
+
+## Command references
+list of open ports
+
+    sudo netstat -tulpn
+f

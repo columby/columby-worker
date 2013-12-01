@@ -1,84 +1,130 @@
 <?php
 
+/** 
+ *
+ * Background data processor
+ * 
+ **/
+
 error_reporting(E_ALL);
 
 require_once("config/settings.php");
 require_once("parsers/queue.php");
 
+// Set vars
+$processing=FALSE;  // Is there a job running?
+$job = array();          // Array with job information
+$job['job_log'] = array();
+$job['job_errorlog'] = array();
 
-// RENDER
-$processing=FALSE;
-$worker_log='';
+/** 
+ * Main function for processing the job-item
+ *
+ * * Create job item
+ * * Drop existing table
+ * * Reset the queue item
+ * * Determine job type
+ * * Parse job
+ * * Save parse-log (in columby_worker_log)
+ * * Save queue error-log (in columby_queue)
+ * * Update Drupal node? 
+ *
+ **/
+function process_job(){
 
-function render(){
+  global $processing, $job;
 
-  global $processing, $worker_log;
+  // Start with clean job-object
+  $job = [];
+  $job['job_log'] = array();
 
+  // Set processing car to true, since processing can take longer than the check_queue interval
   $processing = TRUE;
-
   message("---------------------------------- Start processing data ---------------------------------- ");
   
+  //** CREATE JOB ITEM **//
   // Create a new queue with the new item to be processed inside.
-  $q = new queue();
+  $retrieved_job = new Job();
+  $job = $retrieved_job->job_data; 
   // uuid of the dataset node
-  $uuid = $q->array['uuid'];
+  $uuid = $job['uuid'];
   // postgis tablename for the dataset
   $tablename = "c".str_replace("-", "_", $uuid);
 
+  //** DROP EXISTING TABLE **//
   // Drop the table if it exists
   $sql = "DROP TABLE IF EXISTS $tablename";
-  $res = pgq($sql, TRUE);
-  message("Cleared existing database if it existed.");
+  $result = postgis_query($sql);
+  if (!$result) {
+    message("Error connecting to the database. Not processing the data. Trying again in 60 seconds."); 
+    sleep(60);
+  } else {
 
-  // Reset queue
-  $q->put("data","");
-  $q->put("stats","");
-  $q->put("split","0");
-  $q->put("total","");
+    message("Cleared existing database if it existed.");
 
-  // Determine the job-type and start processing (separate classes)
-  message("Determining job-type");
-  $type = $q->array['type']; 
-  switch ($type) {
-    /* 
-      0 = "csv"
-      1 = "arcgis10"
-      2 = "iati"; 
-    */
+    //** RESET QUEUE ITEM **//
+    $retrieved_job->put("data","");
+    $retrieved_job->put("stats","");
+    $retrieved_job->put("split","0");
+    $retrieved_job->put("total","");
 
-    case 0: //'csv':
-      require_once("parsers/csv.php");
-      message("Creating a new CSV job-type. ");
-      $a = new csv($q);
-    break;
-    case 1: //'arcgis10':
-      require_once("parsers/arcgis.php");
-      message("Creating a new ARCGIS job-type. ");
-      $a = new scraper($q);
-    break;
-    case 2: //'iati':
-      require_once("parsers/iati.php");
-      message("Creating a new IATI job-type. ");
-      $a = new iati($q);
-    break;
-    case null: 
-      message("No record found, skipping this task. ");
-    break; 
+    // Determine the job-type and start processing (separate classes)
+    $type = $job['type']; 
+    message("Determining job-type: " . $type);
+    
+    switch ($type) {
+      /* 
+        0 = "csv"
+        1 = "arcgis10"
+        2 = "iati"; 
+      */
+      case "0": //'csv':
+        require_once("parsers/csv.php");
+        message("Creating a new CSV job-type. ");
+        $parsed = new csv($job);
+      break;
+      case "1": //'arcgis10':
+        require_once("parsers/arcgis.php");
+        message("Creating a new ARCGIS job-type. ");
+        $parsed = new scraper($job);
+      break;
+      case "2": //'iati':
+        require_once("parsers/iati.php");
+        message("Creating a new IATI job-type. ");
+        $parsed = new iati($job);
+      break;
+      case null: 
+      $parsed = '';
+        message("No record found, skipping this task. ");
+      break; 
+    }
+
+    message("Finished processing job " . $job['uuid'] . ' with type ' . $type);
+
+    $job['job_log'] = $parsed->job_log; 
+    message(print_r($job));
+    $job['job_errorlog'] = $parsed->job_errorlog; 
   }
 
-  message("Finished processing ".$q->array['type']." of ".$q->array['uuid']);
+  message("---------------------------------- Finished processing data ---------------------------------- ");
+  message("---------------------------------------------------------------------------------------------- ");
 
-  worker_log_save($q->array['uuid'], 1, 'message');
+  worker_log_save($job['uuid']);
 
   $processing = FALSE;
+
 }
 
-// check queue
+/**
+ * Check the queue for items to be processed. 
+ * 
+ * @return Boolean
+ **/
 function check_queue(){
-  
+  // Only check when the processor is not running
   global $processing; 
   if ($processing) {
-    message("render already running. "); 
+    message("render already running. ");
     return FALSE; 
   }
 
@@ -86,53 +132,58 @@ function check_queue(){
   $conn = drupal_connect();
 
   // query when there is a connection
-  if ($conn) {
-    // We already checked for processing above, is this secure??? 
-    // Set old items still set to processing=0
+  if (!$conn) {
+    message("Error connecting to the CMS database.");
+  
+  } else {
+    // To be sure, set the processing of items to off.
     message("Setting all items to processing=0", "nolog"); 
-    $q = mysql_query("UPDATE columby_queue SET processing=0 WHERE processing=1",$conn);
+    $q = mysql_query("UPDATE columby_queue SET processing=0 WHERE processing=1", $conn);
 
     // check to see if there is (more than) 1 item in the queue for processing
-    $q = mysql_query("SELECT COUNT(ID) FROM columby_queue WHERE done=0 AND processing=0",$conn);
-    $count = mysql_result($q,0);
+    $q = mysql_query("SELECT COUNT(ID) FROM columby_queue WHERE done=0 AND processing=0", $conn);
+    $count = mysql_result($q, 0);
 
-    // For duplicate entries, delete old items
-      // Get the next item for processing (lowest ID where done=0)
-    //$q = mysql_query("SELECT ID, UUID FROM columby_queue WHERE done=0 AND processing=0 ORDER BY ID ASC LIMIT 1",$conn);
-      // Check if there are more jobs for one UUID
-    //$q = mysql_query("SELECT ID, UUID FROM columby_queue WHERE done=0 AND processing=0 AND UUID='$uuid' ORDER BY ID ASC OFFSET 1",$conn);
-      // Update all older items and set them to done=1
-    //$q = mysql_query("UPDATE columby_queue SET processing=0, done=1, error='Aborted because of new job. ' WHERE UUID='$uuid' AND done=0 ORDER BY ID ASC OFFSET 1",$conn);
-
-    if ($count > 0) {
-      message("There are items to be processed: $count", "nolog");
+    if ($count == 1) {
+      message("There is $count job waiting for processing.", "nolog");
+      return TRUE;
+    } elseif ($count > 1) {
+      message("There are $count job-items waiting for processing.", "nolog");
       return TRUE;
     } else {
       message("There are no items to be processed. ", "nolog");
     }
   }
-
   // error in connection, or no items to process
   return FALSE;
 }
 
-// Messages
+
+/**
+ * Process messages sent from the parsers
+ * 
+ * @param $message 
+ *   The message text
+ * @param $service 
+ *   Where to send the message to. 
+ */
 function message($message,$service="log"){
 
   switch ($service){
+    // Only send to supervisor log
     case "nolog":
       echo date('c')." - ".$message."\n";
-    break;
+      break;
+    // Send it to the log message object
     case "log":
       echo date('c')." - ".$message."\n";
-
-      // Add to log object to be able to send to columby_worker_log_log()
       worker_log_add(date('c')." - ".$message."\n");
-
       break;
+    // Send a message to twitter
     case "tweet":
       echo "TWEET: $message \n";
       break;
+    // Send the message to Drupal Watchdog.
     case "drupal":
       warn($message);
       break;
@@ -140,29 +191,73 @@ function message($message,$service="log"){
 }
 
 
-// *** Log functions ***//
+/************* WORKER LOG *************/
+
+/**
+ * Add a message to the worker log
+ * 
+ * @param $message String
+ *
+ **/
 function worker_log_add($message){
-  global $worker_log;
-  $worker_log .= date('c')." - ".$message."\n";
+  global $job;
+  $job['job_log'][] = $message;
 }
 
-function worker_log_save($uuid, $severity, $message){
-  global $worker_log;
-  $conn = drupal_connect();
-  $worker_log = mysql_real_escape_string($worker_log);
-  $message = mysql_real_escape_string($message);
-  mysql_query("INSERT INTO columby_worker_log (uuid, severity, message, log) VALUES ('$uuid', $severity, '$message', '$worker_log')",$conn) or die(mysql_error());
+/**
+ * Save the worker log object to the database
+ *
+ * @param $uuid String
+ *
+ **/
+function worker_log_save($uuid){
+  // get the job log
+  global $job;
+  $log = $job['job_log']; 
+  $errorlog = $job['job_errorlog'];
 
-  message('worker_log: ' . $worker_log);
+  message('Saving log for $uuid', 'nolog');
+
+  // only save the log for the right uuid
+  if ($job['uuid'] == $uuid) {
+    
+    // check if there are log items present
+    if (count($log) > 0) {
+      
+      // connect to the database
+      $conn = drupal_connect();
+      
+      // convert array to string
+      $log = implode("\n", $log);
+      message($log, 'nolog');
+      
+      // escape unwanted characters
+      $log = mysql_real_escape_string($log);
+      message($log,'nolog');
+
+      // send to database
+      $result = mysql_query("INSERT INTO columby_worker_log (uuid, log) VALUES ('$uuid', '$log')",$conn) or die(mysql_error());
+      message("Log for $uuid sent to database. ", "nolog");
+    } else {
+      message("There are no items in the log, not sent to database. ", "nolog");
+    }
+  } else {
+    message("$uuid is not the current log uuid. ", "nolog");
+  }
 }
 
 
 
 
-// ***** PostGIS ***** //
+/************* DATABASE FUNCTIONS *************/
 
-// PostGIS Connection
-function columby_postgis_connect() {
+/**
+ * Open a PostGIS Connection
+ * 
+ * @return Connection resource or FALSE
+ *
+ **/
+function postgis_connect() {
 
   global $columby_pg_data;
 
@@ -173,37 +268,58 @@ function columby_postgis_connect() {
   // Return connection resource or FALSE
   return $conn; 
 }
-// PostGIS close
-function columby_postgis_close($c) {
+
+/**
+ * Close an open PostGIS connection
+ * 
+ * @param $c Connection
+ *
+ * @return close response
+ *
+ **/
+function postgis_close($c) {
   return pg_close($c);
 }
 
-// PostGis query + error log
-function pgq($sql,$no_error=FALSE){
+/**
+ * Execute a postGIS query command
+ * 
+ * @param $sql String
+ * 
+ * @return pg_query return or false
+ *
+ **/
+function postgis_query($sql){
 
-  $conn = columby_postgis_connect();
+  // open a connection
+  $conn = postgis_connect();
 
-  if ($conn) {
+  if (!$conn) {
+    message("Error connecting to postGIS. "); 
+    return FALSE; 
 
-    $q = pg_query($conn, $sql);
-    if(!$q && !$no_error){
+  } else {
+
+    $result = pg_query($conn, $sql);
+    
+    if(!$result){
       message(pg_last_error());
       pg_close($conn); 
-      return false;
+      return FALSE;
     }
     // Close the connection
     pg_close($conn); 
-
     // send the query result resource back. 
-    return $q;
-  } else {
-    message("Error connecting to postGIS. "); 
-    sleep(60); 
-    return FALSE; 
+    return $result;
   }
 }
 
-// Drupal Connection - FALSE
+/**
+ * Open a Drupal Database connection
+ * 
+ * @return Connection or FALSE
+ * 
+ **/
 function drupal_connect(){
 
   // get settings from settings.php
@@ -215,18 +331,25 @@ function drupal_connect(){
     // If there is an error in connecting, return nothing and report an error
     message("Error connecting to Drupal database: " . mysql_error());
     return FALSE;
-    } else {
-      // Try selecting the right database
-      $conndb = mysql_select_db($drupaldb['db'],$conn);
-      if (!$conndb) {
-        // if there is an error in selecting the database, return nothing and report
-        message("Error selecting database: " . mysql_error());
-        return FALSE;
-      }
+  } else {
+    // Try selecting the right database
+    $conndb = mysql_select_db($drupaldb['db'], $conn);
+    if (!$conndb) {
+      // if there is an error in selecting the database, return nothing and report
+      message("Error selecting database: " . mysql_error());
+      return FALSE;
     }
+  }
 
   // There is a connection and the database is selected, return this connection
   return $conn;
+}
+
+function drupal_close($conn){
+
+}
+function drupal_query($sql){
+
 }
 
 
@@ -263,13 +386,13 @@ run()
     render()>>
   sleep(60)
 
-checkqueue()
+check_queue()
   drupal_connect()
     return FALSE or $conn
   count queue items
   return TRUE or FALSE
 
-render() 
+process_job() 
   create queue >> class queue()
   drop existing table
   determine job-type
@@ -278,7 +401,7 @@ render()
     delete existing metadata
     add metadata
 
-queue() 
+class queue() 
   Get first item from render_queue and return this array
 
 CSV()
