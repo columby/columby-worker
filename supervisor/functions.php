@@ -10,6 +10,7 @@ error_reporting(E_ALL);
 
 require_once("config/settings.php");
 require_once("parsers/queue.php");
+require_once("drupal/drupalREST.php");
 
 // Set vars
 $processing=FALSE;  // Is there a job running?
@@ -42,6 +43,15 @@ function process_job(){
   $processing = TRUE;
   message("---------------------------------- Start processing data ---------------------------------- ");
   
+  // Initialize api
+  global $drupaluser;
+  $api = new DrupalREST($drupaluser['endpoint'], $drupaluser['username'], $drupaluser['pass']);
+  if ($api->login()){
+    message("Connected to the Columby API");
+  } else {
+    message("Error connecting to the Columby API");
+  }
+
   //** CREATE JOB ITEM **//
   // Create a new queue with the new item to be processed inside.
   $retrieved_job = new Job();
@@ -50,6 +60,14 @@ function process_job(){
   $uuid = $job['uuid'];
   // postgis tablename for the dataset
   $tablename = "c".str_replace("-", "_", $uuid);
+
+  // update CMS Node fields (using columby service)
+  // Tell Drupal that node data is being processed. 
+  // $field_data_worker_status = 'in_progress';
+  $fields=['worker_status'=>'in progress'];
+  if ($api->update($uuid, $fields)){
+    message("Sent 'in progress' worker status to the ColumbyAPI. ");
+  }
 
   //** DROP EXISTING TABLE **//
   // Drop the table if it exists
@@ -60,7 +78,7 @@ function process_job(){
     sleep(60);
   } else {
 
-    message("Cleared existing database if it existed.");
+    message("Cleared existing database. ");
 
     //** RESET QUEUE ITEM **//
     $retrieved_job->put("data","");
@@ -70,7 +88,6 @@ function process_job(){
 
     // Determine the job-type and start processing (separate classes)
     $type = $job['type']; 
-    message("Determining job-type: " . $type);
     
     switch ($type) {
       /* 
@@ -80,34 +97,70 @@ function process_job(){
       */
       case "0": //'csv':
         require_once("parsers/csv.php");
-        message("Creating a new CSV job-type. ");
+        message("Job type: CSV. ");
         $parsed = new csv($job);
       break;
       case "1": //'arcgis10':
         require_once("parsers/arcgis.php");
-        message("Creating a new ARCGIS job-type. ");
+        message("Job type: ARCGIS. ");
         $parsed = new scraper($job);
       break;
       case "2": //'iati':
         require_once("parsers/iati.php");
-        message("Creating a new IATI job-type. ");
+        message("Job type: IATI. ");
         $parsed = new iati($job);
       break;
       case null: 
       $parsed = '';
-        message("No record found, skipping this task. ");
+        message("No job-type found, skipping this task. ");
       break; 
     }
 
-    message("Finished processing job " . $job['uuid'] . ' with type ' . $type);
+    // Export table to csv-file if necessary
+    message("Exporting table to file.");
+    $r = postgis_export_table($uuid);
+    
+    if ($r == 'success') {
+      message("Export succeeded. ");
+      // Send command to Columby API
+      $fields = [];
+      $fields['file'] = '/home/columby/exports/'.$uuid.'.csv';
+      if ($api->update($uuid, $fields)){
+        message("Updated the file to " . $fields['file']);
+      }
+    } else {
+      message("Export error. ");
+    }
 
-    $job['job_log'] = $parsed->job_log; 
-    message(print_r($job));
+    message("Finished processing job " . $uuid . ' with type ' . $type);
+
+    // add errors from the parser to the errorlog
     $job['job_errorlog'] = $parsed->job_errorlog; 
   }
 
+  // update CMS Node fields (using columby service)
+  //$field_data_geo
+  
+  //$field_data_worker_status
+  $fields=[];
+  $fields['worker_status'] = 'finished';
+  //$field_data_worker_error
+  if (count($job['job_errorlog'])>0) {
+    $fields['worker_status'] = 'error';
+    $e = implode(',', $job['job_errorlog']);
+    message("Checking for errors: $e"); 
+    $fields['worker_error'] = implode("<br>", $job['job_errorlog']);
+  } else {
+    message("No errors found during processing. Success!");
+  }
+  
+  if ($api->update($uuid, $fields)){
+    message("Updated the node worker status to " . $fields['worker_status']);
+  }
+
+  message("---------------------------------- ------------------------ ---------------------------------- ");
   message("---------------------------------- Finished processing data ---------------------------------- ");
-  message("---------------------------------------------------------------------------------------------- ");
+  message("---------------------------------- ------------------------ ---------------------------------- ");
 
   worker_log_save($job['uuid']);
 
@@ -172,7 +225,7 @@ function message($message,$service="log"){
   switch ($service){
     // Only send to supervisor log
     case "nolog":
-      echo date('c')." - ".$message."\n";
+      echo date('c')." - [...] ".$message."\n";
       break;
     // Send it to the log message object
     case "log":
@@ -218,6 +271,8 @@ function worker_log_save($uuid){
 
   message('Saving log for $uuid', 'nolog');
 
+  // Each message() statement is saved to $job['job_log'] by worker_log_add() 
+
   // only save the log for the right uuid
   if ($job['uuid'] == $uuid) {
     
@@ -228,7 +283,7 @@ function worker_log_save($uuid){
       $conn = drupal_connect();
       
       // convert array to string
-      $log = implode("\n", $log);
+      $log = implode(";", $log);
       message($log, 'nolog');
       
       // escape unwanted characters
@@ -286,33 +341,48 @@ function postgis_close($c) {
  * 
  * @param $sql String
  * 
- * @return pg_query return or false
+ * @return result or FALSE
  *
  **/
 function postgis_query($sql){
 
+  $output = FALSE; 
   // open a connection
   $conn = postgis_connect();
 
   if (!$conn) {
-    message("Error connecting to postGIS. "); 
-    return FALSE; 
-
+    message("Error connecting to postGIS. ");
   } else {
-
     $result = pg_query($conn, $sql);
-    
     if(!$result){
-      message(pg_last_error());
-      pg_close($conn); 
-      return FALSE;
+      message("Error executing query. [details: " . pg_last_error(). "]");
     }
-    // Close the connection
     pg_close($conn); 
-    // send the query result resource back. 
-    return $result;
+    $output = $result;
+  }
+
+  return $output;
+}
+
+// Export table to csv for download
+function postgis_export_table($uuid) {
+  $tablename = 'c'.str_replace('-', '_', $uuid);
+
+  //get table columns
+  $sql ="SELECT * FROM information_schema.columns WHERE table_schema='public' AND table_name='".$tablename."'";
+  $result = postgis_query($sql);
+  message("'export table result:");
+  message(serialize($result));
+  // https://wiki.postgresql.org/wiki/COPY
+  $sql="COPY $tablename TO '/home/columby/exports/".$uuid.".csv' WITH DELIMITER AS ',' NULL AS '' CSV HEADER;";
+  $result = postgis_query($sql);
+  if ($result == 'success') {
+    return TRUE; 
+  } else {
+    return FALSE;
   }
 }
+
 
 /**
  * Open a Drupal Database connection
@@ -351,6 +421,7 @@ function drupal_close($conn){
 function drupal_query($sql){
 
 }
+
 
 
 // ***** TWITTER ***** //
