@@ -11,12 +11,12 @@ error_reporting(E_ALL);
 require_once("config/settings.php");
 require_once("parsers/queue.php");
 require_once("drupal/drupalREST.php");
+require_once("logger/logger.php");
 
 // Set vars
 $processing=FALSE;  // Is there a job running?
 $job = array();          // Array with job information
-$job['job_log'] = array();
-$job['job_errorlog'] = array();
+$logger; 
 
 /** 
  * Main function for processing the job-item
@@ -35,21 +35,24 @@ function process_job(){
 
   global $processing, $job;
 
+  // initiate logger
+  global $logger;
+  $logger = new Logger(); 
+
   // Start with clean job-object
   $job = [];
-  $job['job_log'] = array();
-
+  
   // Set processing car to true, since processing can take longer than the check_queue interval
   $processing = TRUE;
-  message("---------------------------------- Start processing data ---------------------------------- ");
+  message("---------------------------------- Start processing data ---------------------------------- ",'log','NOTICE');
   
   // Initialize api
   global $drupaluser;
   $api = new DrupalREST($drupaluser['endpoint'], $drupaluser['username'], $drupaluser['pass']);
   if ($api->login()){
-    message("Connected to the Columby API");
+    message("Connected to the Columby API",'log','NOTICE');
   } else {
-    message("Error connecting to the Columby API");
+    message("Error connecting to the Columby API",'log','ERROR');
   }
 
   //** CREATE JOB ITEM **//
@@ -65,8 +68,9 @@ function process_job(){
   // Tell Drupal that node data is being processed. 
   // $field_data_worker_status = 'in_progress';
   $fields=['worker_status'=>'in progress'];
-  if ($api->update($uuid, $fields)){
-    message("Sent 'in progress' worker status to the ColumbyAPI. ");
+  $r = $api->update($uuid, $fields); 
+  if ($r){
+    message("Sent 'in progress' worker status to the ColumbyAPI. ",'log','NOTICE');
   }
 
   //** DROP EXISTING TABLE **//
@@ -74,11 +78,11 @@ function process_job(){
   $sql = "DROP TABLE IF EXISTS $tablename";
   $result = postgis_query($sql);
   if (!$result) {
-    message("Error connecting to the database. Not processing the data. Trying again in 60 seconds."); 
+    message("Error connecting to the database. Not processing the data. Trying again in 60 seconds.",'log','ERROR'); 
     sleep(60);
   } else {
 
-    message("Cleared existing database. ");
+    message("Cleared existing database. ",'log','NOTICE');
 
     //** RESET QUEUE ITEM **//
     $retrieved_job->put("data","");
@@ -97,45 +101,45 @@ function process_job(){
       */
       case "0": //'csv':
         require_once("parsers/csv.php");
-        message("Job type: CSV. ");
+        message("Job type: CSV. ",'log','NOTICE');
         $parsed = new csv($job);
       break;
       case "1": //'arcgis10':
         require_once("parsers/arcgis.php");
-        message("Job type: ARCGIS. ");
+        message("Job type: ARCGIS. ",'log','NOTICE');
         $parsed = new scraper($job);
       break;
       case "2": //'iati':
         require_once("parsers/iati.php");
-        message("Job type: IATI. ");
+        message("Job type: IATI. ",'log','NOTICE');
         $parsed = new iati($job);
       break;
       case null: 
       $parsed = '';
-        message("No job-type found, skipping this task. ");
+        message("No job-type found, skipping this task. ",'log','NOTICE');
       break; 
     }
 
     // Export table to csv-file if necessary
-    message("Exporting table to file.");
-    $r = postgis_export_table($uuid);
-    
-    if ($r == 'success') {
-      message("Export succeeded. ");
-      // Send command to Columby API
-      $fields = [];
-      $fields['file'] = '/home/columby/exports/'.$uuid.'.csv';
-      if ($api->update($uuid, $fields)){
-        message("Updated the file to " . $fields['file']);
+    if (($type == "0")||($type == "1")){
+      message("Exporting table to file.",'log','NOTICE');
+      $file = postgis_export_table($uuid);
+      if ($file) {
+        message("Export succeeded. ",'log','NOTICE');
+        // Send command to Columby API
+        $fields = [];
+        $fields['file'] = '/home/columby/exports/'.$uuid.'.csv';
+        if ($api->update($uuid, $fields)){
+          message("Updated the file to " . $fields['file'],'log','NOTICE');
+        }
+      } else {
+        message("Export error. ",'nolog','log','NOTICE');
       }
     } else {
-      message("Export error. ");
+      message("File is not saved as a table in the database, file-export is not needed. ",'log','NOTICE');
     }
 
-    message("Finished processing job " . $uuid . ' with type ' . $type);
-
-    // add errors from the parser to the errorlog
-    $job['job_errorlog'] = $parsed->job_errorlog; 
+    message("Finished processing job " . $uuid . ' with type ' . $type,'log','NOTICE');
   }
 
   // update CMS Node fields (using columby service)
@@ -144,23 +148,38 @@ function process_job(){
   //$field_data_worker_status
   $fields=[];
   $fields['worker_status'] = 'finished';
-  //$field_data_worker_error
-  if (count($job['job_errorlog'])>0) {
-    $fields['worker_status'] = 'error';
-    $e = implode(',', $job['job_errorlog']);
-    message("Checking for errors: $e"); 
-    $fields['worker_error'] = implode("<br>", $job['job_errorlog']);
+  message($parsed->geo,'log','NOTICE');
+
+  $geo = $parsed->geo;
+  if ($geo=='1') {
+    $geo = 1; 
   } else {
-    message("No errors found during processing. Success!");
+    $geo = 0; 
+  }
+  message("Setting geo to ".$geo, 'log','NOTICE');
+  $fields['geo'] = $geo;
+
+  // check and log errors
+  $e = $logger->get_errorlog();
+
+  if (count($e)>0) {
+    $fields['worker_status'] = 'error';
+    $e = implode("\n", $e);
+    message("There where errors generated during processing:",'log','NOTICE'); 
+    message($e,'log','NOTICE');
+    $fields['worker_error'] = $e;
+
+  } else {
+    message("No errors found during processing. Success!",'log','NOTICE');
   }
   
   if ($api->update($uuid, $fields)){
-    message("Updated the node worker status to " . $fields['worker_status']);
+    message("Updated the node worker status to " . $fields['worker_status'],'log','NOTICE');
   }
 
-  message("---------------------------------- ------------------------ ---------------------------------- ");
-  message("---------------------------------- Finished processing data ---------------------------------- ");
-  message("---------------------------------- ------------------------ ---------------------------------- ");
+  message("---------------------------------- ------------------------ ---------------------------------- ",'log','NOTICE');
+  message("---------------------------------- Finished processing data ---------------------------------- ",'log','NOTICE');
+  message("---------------------------------- ------------------------ ---------------------------------- ",'log','NOTICE');
 
   worker_log_save($job['uuid']);
 
@@ -177,7 +196,7 @@ function check_queue(){
   // Only check when the processor is not running
   global $processing; 
   if ($processing) {
-    message("render already running. ");
+    message("render already running. ",'log','NOTICE');
     return FALSE; 
   }
 
@@ -186,11 +205,11 @@ function check_queue(){
 
   // query when there is a connection
   if (!$conn) {
-    message("Error connecting to the CMS database.");
+    message("Error connecting to the CMS database.",'log','NOTICE');
   
   } else {
     // To be sure, set the processing of items to off.
-    message("Setting all items to processing=0", "nolog"); 
+    message("Setting all items to processing=0",'log','DEBUG'); 
     $q = mysql_query("UPDATE columby_queue SET processing=0 WHERE processing=1", $conn);
 
     // check to see if there is (more than) 1 item in the queue for processing
@@ -198,13 +217,13 @@ function check_queue(){
     $count = mysql_result($q, 0);
 
     if ($count == 1) {
-      message("There is $count job waiting for processing.", "nolog");
+      message("There is $count job waiting for processing.",'log','DEBUG'); 
       return TRUE;
     } elseif ($count > 1) {
-      message("There are $count job-items waiting for processing.", "nolog");
+      message("There are $count job-items waiting for processing.",'log','DEBUG'); 
       return TRUE;
     } else {
-      message("There are no items to be processed. ", "nolog");
+      message("There are no items to be processed. ",'log','DEBUG'); 
     }
   }
   // error in connection, or no items to process
@@ -217,25 +236,33 @@ function check_queue(){
  * 
  * @param $message 
  *   The message text
- * @param $service 
- *   Where to send the message to. 
+ * @param $service
+ *   service for the message
+ * @param $severity
+ *   Severity of the message
+ *     ERROR: Error conditions.
+ *     NOTICE: (default) Normal but significant conditions.
+ *     DEBUG: Debug-level messages.
  */
-function message($message,$service="log"){
+function message($message, $service='log', $severity='INFO'){
 
   switch ($service){
-    // Only send to supervisor log
-    case "nolog":
-      echo date('c')." - [...] ".$message."\n";
-      break;
-    // Send it to the log message object
+    
     case "log":
-      echo date('c')." - ".$message."\n";
-      worker_log_add(date('c')." - ".$message."\n");
+      
+      if ($severity=='DEBUG') {
+        echo date('c')." - [...] ".$message."\n";
+      } else {
+        global $logger;
+        $logger->add($message, $severity);
+      }
       break;
+    
     // Send a message to twitter
     case "tweet":
       echo "TWEET: $message \n";
       break;
+    
     // Send the message to Drupal Watchdog.
     case "drupal":
       warn($message);
@@ -243,18 +270,14 @@ function message($message,$service="log"){
   }
 }
 
+function get_log(){
+  global $logger;
+  return $logger->get_log(); 
+}
 
-/************* WORKER LOG *************/
-
-/**
- * Add a message to the worker log
- * 
- * @param $message String
- *
- **/
-function worker_log_add($message){
-  global $job;
-  $job['job_log'][] = $message;
+function get_errorlog(){
+  global $logger;
+  return $logger->get_errorlog();
 }
 
 /**
@@ -266,38 +289,37 @@ function worker_log_add($message){
 function worker_log_save($uuid){
   // get the job log
   global $job;
-  $log = $job['job_log']; 
-  $errorlog = $job['job_errorlog'];
+  global $logger;
 
-  message('Saving log for $uuid', 'nolog');
-
-  // Each message() statement is saved to $job['job_log'] by worker_log_add() 
+  message('Saving log for $uuid', 'log', 'DEBUG');
 
   // only save the log for the right uuid
   if ($job['uuid'] == $uuid) {
-    
+    message('getting log object','log','DEBUG');
+    $l = $logger->get_log();
+    message('logcount: ' . count($l),'log','DEBUG');
+    //message(implode(',',$l),'log','DEBUG');
     // check if there are log items present
-    if (count($log) > 0) {
+    if (count($l) > 0) {
       
       // connect to the database
       $conn = drupal_connect();
-      
       // convert array to string
-      $log = implode(";", $log);
-      message($log, 'nolog');
-      
+      $log = implode("\n", $l);
       // escape unwanted characters
       $log = mysql_real_escape_string($log);
-      message($log,'nolog');
-
+      
       // send to database
-      $result = mysql_query("INSERT INTO columby_worker_log (uuid, log) VALUES ('$uuid', '$log')",$conn) or die(mysql_error());
-      message("Log for $uuid sent to database. ", "nolog");
+      $sql = "INSERT INTO columby_worker_log (uuid, log) VALUES ('$uuid', '$log')";
+      message('Sending sql: ' . $sql,'log','DEBUG');
+
+      $result = mysql_query($sql,$conn) or die(mysql_error());
+      message("Log for $uuid sent to database. ",'log','DEBUG');
     } else {
-      message("There are no items in the log, not sent to database. ", "nolog");
+      message("There are no items in the log, not sent to database. ",'log','DEBUG'); 
     }
   } else {
-    message("$uuid is not the current log uuid. ", "nolog");
+    message("$uuid is not the current log uuid. ",'log','DEBUG'); 
   }
 }
 
@@ -351,11 +373,11 @@ function postgis_query($sql){
   $conn = postgis_connect();
 
   if (!$conn) {
-    message("Error connecting to postGIS. ");
+    message("Error connecting to postGIS. ",'log','ERROR'); 
   } else {
     $result = pg_query($conn, $sql);
     if(!$result){
-      message("Error executing query. [details: " . pg_last_error(). "]");
+      message("Error executing query. [details: " . pg_last_error(). "]",'log','ERROR'); 
     }
     pg_close($conn); 
     $output = $result;
@@ -368,19 +390,78 @@ function postgis_query($sql){
 function postgis_export_table($uuid) {
   $tablename = 'c'.str_replace('-', '_', $uuid);
 
-  //get table columns
-  $sql ="SELECT * FROM information_schema.columns WHERE table_schema='public' AND table_name='".$tablename."'";
+  //Get table columns
+  $sql ="SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='".$tablename."'";
   $result = postgis_query($sql);
-  message("'export table result:");
-  message(serialize($result));
-  // https://wiki.postgresql.org/wiki/COPY
-  $sql="COPY $tablename TO '/home/columby/exports/".$uuid.".csv' WITH DELIMITER AS ',' NULL AS '' CSV HEADER;";
-  $result = postgis_query($sql);
-  if ($result == 'success') {
-    return TRUE; 
-  } else {
-    return FALSE;
+  // process results
+  $names = [];
+  while ($row = pg_fetch_assoc($result)) {
+    $names[] = $row['column_name'];
   }
+
+  // remove unneeded columns and create string for new statement. 
+  $n = "\"".implode("\",\"", array_diff($names, array('cid', 'createdAt', 'createdat','updatedAt','updatedat','the_geom')))."\""; 
+  message("Column names: " . $n, 'log', 'NOTICE');
+
+  // Create a local file ()
+  $f = fopen("/home/columby/exports/".$uuid.".csv", 'w');
+  if ($f != FALSE) {
+    message('file: '. serialize($f), 'log', 'DEBUG');
+    // Add first line (with the headers)
+    $header = $n . ',"WKT"' . "\n";
+    $fwrite = fwrite($f, $header); 
+
+    if ($fwrite != FALSE){
+      $sql = "SELECT " . $n . ",ST_AsText(the_geom) AS WKT FROM $tablename;";
+      message("Sending sql: $sql",'log','DEBUG'); 
+      $result = postgis_query($sql);
+      $err = FALSE;
+      while ($row = pg_fetch_assoc($result)) {
+        $values = array();
+        foreach ($row as $key=>$value) {
+          $values[] = '"'.$value.'"';
+        }
+        $res = implode(",", $values) . "\n";
+        message('values: ' . $res,'log','DEBUG');
+        $fpc = file_put_contents("/home/columby/exports/".$uuid.".csv", $res, FILE_APPEND | LOCK_EX);
+        if ($fpc == FALSE) {
+          $err = TRUE;
+          message("Error writing file. ", 'log','ERROR');  
+        } else {
+          message("written: " . $fpc, 'log', 'DEBUG');
+        }
+      }
+
+      if (!$err){
+        return true;
+      } else {
+        return false; 
+      }
+    } else {
+      message("Error writing file. ", 'log','ERROR');  
+    }
+  } else {
+    message("Error opening file. ", 'log','ERROR');
+  }
+
+  /*
+  "Files named in a COPY command are read or written directly by the server, not by the client application. Therefore, they must reside on or be accessible to the database server machine, not the client. 
+  They must be accessible to and readable or writable by the PostgreSQL user (the user ID the server runs as), not the client. 
+  COPY naming a file is only allowed to database superusers, since it allows reading or writing any file that the server has privileges to access." (postgresql.org/docs/current/static/sql-copy.html)
+  */
+
+  // Copy creates the file on the database server, not the supervisor worker server. 
+  /*
+  $sql="COPY $tablename TO '/tmp/exports/".$uuid.".csv' WITH DELIMITER AS ',' NULL AS '' CSV HEADER;";
+  message("Sending sql: $sql",'log','DEBUG'); 
+  $result = postgis_query($sql);
+  message("export table result:",'log','DEBUG'); 
+  
+  message(serialize($result),'log','DEBUG'); 
+  if ($result != FALSE) { return TRUE; 
+  } else { return FALSE;
+  }
+  */
 }
 
 
@@ -399,14 +480,14 @@ function drupal_connect(){
 
   if (!$conn) {
     // If there is an error in connecting, return nothing and report an error
-    message("Error connecting to Drupal database: " . mysql_error());
+    message("Error connecting to Drupal database: " . mysql_error(),'log','ERROR'); 
     return FALSE;
   } else {
     // Try selecting the right database
     $conndb = mysql_select_db($drupaldb['db'], $conn);
     if (!$conndb) {
       // if there is an error in selecting the database, return nothing and report
-      message("Error selecting database: " . mysql_error());
+      message("Error selecting database: " . mysql_error(),'log','ERROR'); 
       return FALSE;
     }
   }

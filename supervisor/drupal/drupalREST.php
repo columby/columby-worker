@@ -16,12 +16,17 @@ class DrupalREST {
 
   function login() {
 
-    $ch = curl_init($this->endpoint . 'user/login.json');
+    $output = FALSE; 
+
+    $ch = curl_init($this->endpoint . 'user/login.json');    
     $post_data = array(
       'username' => $this->username,
       'password' => $this->password,
     );
     $post = http_build_query($post_data, '', '&');
+
+    // against https Curl error: SSL certificate problem: self signed certificate in certificate chain
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADER, false);
@@ -31,8 +36,9 @@ class DrupalREST {
       "Accept: application/json",
       "Content-type: application/x-www-form-urlencoded"
     ));
-    
+
     $response = json_decode(curl_exec($ch));
+    message("response: ". serialize($response),'log','DEBUG');
 
     //Save Session information to be sent as cookie with future calls
     if ($response->session_name && $response->sessid){
@@ -43,6 +49,7 @@ class DrupalREST {
         CURLOPT_RETURNTRANSFER => 1,
         CURLOPT_URL => $this->endpoint . 'user/token.json',
       ));
+      curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
       curl_setopt($ch, CURLOPT_COOKIE, "$this->session"); 
       
       $ret = new stdClass;
@@ -52,9 +59,66 @@ class DrupalREST {
       $t= $ret->response;
       $this->csrf_token = $t->token;
       if ($this->csrf_token){
-        return true;
+        return TRUE;
       }
     }
+
+    /*
+    // first get a token, needed when there is a session
+    $ch = curl_init($this->endpoint . 'user/token.json');    
+    $post_data = array();
+    $post = http_build_query($post_data, '', '&');
+
+    // against https Curl error: SSL certificate problem: self signed certificate in certificate chain
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HEADER, false);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    curl_setopt($ch, CURLOPT_HTTPHEADER,array (
+      "Accept: application/json",
+      "Content-type: application/x-www-form-urlencoded"
+    ));
+
+    $response = json_decode(curl_exec($ch));
+    message("response: ". serialize($response));
+    message('Curl error: ' . curl_error($ch));
+  */
+    // get token
+    /*
+    if ($response->token) {
+      message('Received token (using existing session): ' . $response->token); 
+      $this->csrf_token = $response->token;
+
+      $ch = curl_init($this->endpoint . 'system/connect.json');
+      $post_data = array();
+      $post = http_build_query($post_data, '', '&');
+      $response = json_decode(curl_exec($ch));
+
+      //Save Session information to be sent as cookie with future calls
+      if ($response->session_name && $response->sessid){
+        $this->session = $response->session_name . '=' . $response->sessid;
+        return TRUE; 
+      }
+
+    } else {
+      message('No token received, logging in.');
+
+      $ch = curl_init($this->endpoint . 'user/login.json');
+      $post_data = array(
+        'username' => $this->username,
+        'password' => $this->password,
+      );
+      $post = http_build_query($post_data, '', '&');
+      $response = json_decode(curl_exec($ch));
+
+      message('response: '); 
+      message(serialize($response));
+      
+      
+    }
+    */
   }
 
   // Retrieve a node from a node id
@@ -83,6 +147,7 @@ class DrupalREST {
 
     $post = http_build_query($node, '', '&');
     $ch = curl_init($this->endpoint . 'worker/'.$uuid.'.json');
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT"); // Do an UPDATE PUT POST
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
     curl_setopt($ch, CURLOPT_HEADER, TRUE);

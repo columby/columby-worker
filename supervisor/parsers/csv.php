@@ -6,13 +6,12 @@
  **/
 class csv {
 
-  public $job_errorlog;  // job processing error log
   public $geo;           // is the set geodata? 
   public $worker_error;   // Text with error to send to API
   public $worker_status;  // Status of the worker
 
+  private $local_file_path;
   private $job;           // incoming job item
-  private $processed_job; // processed job data
   
   private $connection;    // connection to drupal database
   private $tablename;     // name of postgis database table
@@ -25,28 +24,32 @@ class csv {
    *
    * @param $job Array with job properties
    *
-   * @return $processed_job Array with processed job properties
+   * @return TRUE
    * 
    **/
   function __construct($job){
+    
+    $local_file_path = '/home/columby/www/columby.dev/sites/default/files/'; 
 
-    $this->job_errorlog = array(); 
-
-    message("CSV: Starting the process of a new CSV file.");
+    $l = get_log(); 
+    message('log:','log','DEBUG');
+    message(implode(",",$l),'log','DEBUG');
+    
+    message("CSV: Starting the process of a new CSV file.",'log','NOTICE');
     
     $this->connection = drupal_connect();
     if (!$this->connection){
-      message("CSV: Error connecting to the job queue database. ");
+      message("CSV: Error connecting to the job queue database. ",'log','ERROR');
     } else {
-      message("CSV: Connected to the job queue database. ");
+      message("CSV: Connected to the job queue database. ",'log','NOTICE');
       $this->job = $job; 
       $this->tablename = "c".str_replace("-", "_", $job['uuid']); 
       $this->id = $job['ID'];
       $uuid = $job['uuid'];
 
-      message("CSV: Fetching data for uuid: " . $job['uuid']);
-      message("CSV: Fetching data for queue id: " . $job['ID']);
-      message("CSV: Fetching data for tablename: " . $this->tablename);
+      message("CSV: Fetching data for uuid: " . $job['uuid'],'log','NOTICE');
+      message("CSV: Fetching data for queue id: " . $job['ID'],'log','NOTICE');
+      message("CSV: Fetching data for tablename: " . $this->tablename,'log','NOTICE');
       
       // Fetch required data from CMS
       $sql = "SELECT 
@@ -64,39 +67,32 @@ class csv {
       
       // Process results
       if (!$result) {
-        $this->job_errorlog[] = date('c').';Error Fetching data from CMS: ' . mysql_error();
-        message("Error Fetching data from CMS: " . mysql_error());
+        message("Error Fetching data from CMS: " . mysql_error(),'log','ERROR');
       } else {
         $row = mysql_fetch_assoc($result);
         $this->datafile_uri = $row["uri"]; 
         
         // change drupal's public:// to http sitename
         // how to get public directory? 
-        $this->datafile_uri = str_replace('public://', '/home/columby/www/columby.dev/sites/default/files/', $this->datafile_uri);
-        message("CSV: Starting the process of node with uuid $this->tablename and datafile. ");
+        $this->datafile_uri = str_replace('public://', $local_file_path, $this->datafile_uri);
+        message("CSV: Starting the process of node with uuid $this->tablename and datafile. ",'log','NOTICE');
         
         if(empty($this->datafile_uri)){
-          $this->job_errorlog[] = date('c').";The reference to the file that should be processed is empty. "; 
-          message("The reference to the file that should be processed is empty. ");
+          message("The reference to the file that should be processed is empty. ",'log','ERROR');
         } else {
           // start processing the csv-file
           $this->process();
         }
       }
 
-      // update queue item
-      if (count($this->processed_job['job_errorlog']) > 0) {
-        $e = implode(', ', $this->processed_job['job_errorlog']);
-        $this->update_queue('error', $e);
+      // End of processing data, update status
+      $el = get_errorlog();
+      if (count($el) > 0) {
+        $el = implode("\n", $el);
+        $this->update_queue('error', $el);
         $this->update_queue('done', "1");
         $this->update_queue('processing', "0");
       }
-
-      // Return job processing info
-      $this->processed_job = array();
-      $this->processed_job['job'] = $this->job; 
-      $this->processed_job['job_errorlog'] = $this->job_errorlog;
-
     }
 
     return TRUE;
@@ -109,21 +105,21 @@ class csv {
    **/
   function process(){
     
-    message("Opening file for data processsing");
+    message("Opening file for data processsing",'log','NOTICE');
     
     $max_line_length = 10000;
     
     // Open the file for reading
     if (($handle = fopen("$this->datafile_uri", 'r')) !== FALSE) {
-      message("File opened");
+      message("File opened",'log','NOTICE');
 
       $file = new SplFileObject($this->datafile_uri);
       
       $delimiter = $file->getCsvControl();
-      message("Processing CSV with delimiter: ");
+      message("Processing CSV with delimiter: ",'log','NOTICE');
       
       $columns = fgetcsv($handle, $max_line_length, $delimiter[0]);
-      message("processed first line.");;
+      message("processed first line.",'log','NOTICE');
       $columns = $this->sanitize_columns($columns); 
       
       $column_types = array();
@@ -134,7 +130,7 @@ class csv {
         if ( ($columns[ $k] == 'WKT') || ($columns[ $k] == 'wkt') ){
           $this->wkt_column = $k;
           $this->geo = TRUE;
-          message("Found a wkt geometry column: $this->wkt_column.");
+          message("Found a wkt geometry column: $this->wkt_column.",'log','NOTICE');
         }
       }
       
@@ -144,13 +140,13 @@ class csv {
       $s = join(" text,", $columns); 
       $s .= " text";
 
-      $sql="CREATE TABLE $this->tablename (cid serial PRIMARY KEY, $s, the_geom geometry, date_created timestamp, date_updated timestamp);";      
-      message("Creating table: $sql");
+      $sql="CREATE TABLE $this->tablename (cid serial PRIMARY KEY, $s, the_geom geometry, createdAt timestamp, updatedAt timestamp);";      
+      message("Creating table: $sql",'log','NOTICE');
 
       $pgResult = postgis_query($sql);
       
       if ($pgResult) {
-        message("Table created.");
+        message("Table created.",'log','NOTICE');
       
         // Create a sql statement to work with
         $sql_pre = '';
@@ -159,7 +155,7 @@ class csv {
         // Counter for rows (and is cid)
         $i = 1;
 
-        message("Starting data processing. ");
+        message("Starting data processing. ",'log','NOTICE');
 
         // Only process when there is no error
         while( (($datarow = fgetcsv($handle, $max_line_length, ',')) !== FALSE) && (!$this->worker_error)) {
@@ -170,7 +166,7 @@ class csv {
           $sqls[] = $sql;
           // Create an sql statement for 500 rows. 
           if(count($sqls) > 500){
-            message("Processed 500 lines, sending data. ");
+            message("Processed 500 lines, sending data. ",'log','NOTICE');
             $this->send($sqls);
             $sqls = []; 
 
@@ -180,21 +176,23 @@ class csv {
           $i++;
         }
         
+        // Finish the job
+
         if (!$this->worker_error) {
-          message("Sending final " . count($sqls) . " lines. ");
+          message("Sending final " . count($sqls) . " lines. ",'log','NOTICE');
           $this->send($sqls);
           $this->update_queue("processed", $i);
         }
 
-        message("Finished data processing. ");
+        message("Finished data processing. ",'log','NOTICE');
         $this->update_queue("processing","0");
         $this->update_queue("done","1");
 
       } else {
-        $this->job_errorlog[] = date('c').";No connection to postgis!";
+        message("No connection to postgis!",'log','ERROR');
       }
     } else {
-      $this->job_errorlog[] = print_r(error_get_last());
+      message(print_r(error_get_last()), 'log','ERROR');
     }
   }
   
@@ -206,21 +204,19 @@ class csv {
    **/
   function send($sqls) {
 
-    message("Sending data to: $this->tablename", "nolog"); 
+    message("Sending data to: $this->tablename",'log','DEBUG'); 
     $sql_pre = join($sqls,", ");
     $sql = "INSERT INTO $this->tablename VALUES $sql_pre;";
     $sql_pre = "";
     
     // send the query
     $pgResult = postgis_query($sql);
-    message("Send result: $pgResult",'nolog'); 
+    message("Send result: $pgResult",'log','DEBUG');
     // Check results
-    if ($pgResult == 'success') {
-      message('Send success!','nolog'); 
+    if ($pgResult != FALSE) {
+      message('Send success!','log','DEBUG');
     } else {
-      $this->update_queue('error', 'error executing query.');
-      $this->job_errorlog[] = "Error executing query: $pgResult";
-      message("Error executing query: $pgResult");
+      message("Error executing query: $pgResult",'log','ERROR');
     }
 
     return $pgResult; 
@@ -239,13 +235,13 @@ class csv {
     $id = $this->id; 
     $val = addslashes($val); 
     $sql = "UPDATE columby_queue SET $col='$val' WHERE ID=$id"; 
-    message("Setting queue item: $sql","nolog"); 
-    $this->job[$col] = $val; 
+    message("Setting queue item: $sql",'log','DEBUG');
+    $this->job[$col] = $val;  
     $q = mysql_query($sql, $conn); 
     if (!$q) {
-      message("Error: ".mysql_error(),'nolog'); 
+      message("Error: ".mysql_error(),'log','NOTICE');
     } else {
-      message("Item written to queue-table ($col: $val)",'nolog');  
+      message("Item written to queue-table ($col: $val)",'log','DEBUG');
     }
   }
 

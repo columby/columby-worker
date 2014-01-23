@@ -30,7 +30,7 @@ The supervisor package from the debian repository does not seem to work properly
 	    files = /etc/supervisor/conf.d/*.conf  
 	    
 	$ sudo mkdir /var/log/supervisor
-	$ sudo mkdir /var/log/supervisor/columby_worker
+	$ sudo mkdir /var/log/supervisor/columby-worker
 	$ sudo mkdir /etc/supervisor
 	$ sudo mkdir /etc/supervisor/conf.d
 	$ sudo nano /etc/supervisor/conf.d/columby_worker.conf
@@ -91,7 +91,11 @@ Init.d script for starting and stopping:
     $ sudo chmod +x /etc/init.d/supervisord  
     $ sudo update-rc.d supervisord defaults
     $ sudo service supervisord start
-
+check process log
+    
+	$ sudo tail -f /var/log/supervisor/columby-worker/columby-worker-error.log
+	$ sudo tail -f /var/log/supervisor/columby-worker/columby-worker.log
+    
 ## Configuration
   1. Copy the configuration file:  
     /etc/supervisor/conf.d/columby_worker.conf

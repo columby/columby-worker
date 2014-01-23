@@ -14,23 +14,24 @@ function hr_memory_usage() {
 
 class scraper {
 
-  public $url = "http://www.denhaag.nl/ArcGIS/rest/services/DsbBeheer/Bomenbeheer/MapServer/4";
+  public $geo;           // is the set geodata? 
+  public $worker_error;   // Text with error to send to API
+  public $worker_status;  // Status of the worker
 
   // Number of items to query per request
   public $cycle = 100;
   
-  private $uuid; 
-  private $tablename; 
-  private $stats; 
-  private $data; 
-  private $total;
-  private $split;
-  private $columnNames;
-  private $columnTypes; 
-  private $objectidPresent;
+  private $connection;
+  private $uuid;
+  private $tablename;
+  private $stats;             // stats received from the service
+  private $ids;               // List of received id's 
+  private $total;             // Total number of items received
+  private $split;             // Current position of the processor
+  private $columns;           // Associative array of column name and type
+  private $objectidPresent;   // Boolean if objectID is present in the service
 
-  //
-  public $queue_table = "queue";
+  private $queue_table = "columby_queue";
 
   /*  public $esriconvertable = array(
                     "esriFieldTypeSmallInteger" => "TINYINT",
@@ -65,280 +66,243 @@ class scraper {
                     "esriFieldTypeXML"      => "TEXT",
                     "Latitude"      => "TEXT");
 
-  function __construct($q){
+  function __construct($job){
 
-    message("CSV: Starting a new arcgis item."); 
+    // Safe to assume all arcGIS data is geo.
+    $this->geo = '1'; 
+
+    $l = get_log(); 
+    message('log:','log','DEBUG');
+    message(implode(",",$l),'log','DEBUG');
+
+    message("ArcGIS: Starting a new arcgis item.", 'log','NOTICE'); 
 
     $this->connection = drupal_connect();
-    message("Connected to database: $this->connection");
-    $this->q = $q; 
-    $this->uuid = $q->array['uuid']; 
-    $uuid = $this->uuid;
-    message("Fetching data for uuid: $uuid");
-    $this->id = $q->array['ID']; 
-    message("Fetching data for queue id: $this->id");
-    $this->tablename = "c".str_replace("-", "_", $this->uuid); 
-    message("Fetching data for tablename: $this->tablename");
-    
-    $sql = "SELECT 
-      n.uuid,
-      n.nid,
-      field_data_field_url.`field_url_url`
-      FROM node n
-      LEFT JOIN field_data_field_url ON n.nid = field_data_field_url.`entity_id`
-      WHERE n.uuid = '$uuid'";
-    $result = mysql_query($sql,$this->connection);
-    
-    while ($row = mysql_fetch_assoc($result)) {
-      //message("******* *******");
-      message(print_r($row));
-      $this->url = $row["field_url_url"]; 
-      message("Starting the process of node with uuid $this->tablename and url: $this->url");
-    }
-    
-    if(empty($this->url)){
-      $this->dbq_put('error', 'The url that should be processed is empty or doesn\'t exist'); 
-      message("The url that should be processed is empty or doesn't exist. ($this->uuid)");
-
-      return FALSE; 
+    if (!$this->connection){
+      message("ArcGIS: Error connecting to the job queue database. ",'log','ERROR');
 
     } else {
-      message("Starting the process of file $this->url. ($this->uuid)");
+
+      message("ArcGIS: Connected to the job queue database. ",'log','NOTICE');
+      $this->job = $job; 
+      $this->tablename = "c".str_replace("-", "_", $job['uuid']); 
+      $this->id = $job['ID'];
+      $this->uuid = $job['uuid'];
+
+      message("ArcGIS: Fetching data for uuid: " . $job['uuid'],'log','NOTICE');
+      message("ArcGIS: Fetching data for queue id: " . $job['ID'],'log','NOTICE');
+      message("ArcGIS: Fetching data for tablename: " . $this->tablename,'log','NOTICE');
+
+      $sql = "SELECT 
+        n.uuid,
+        n.nid,
+        field_data_field_url.`field_url_url`
+        FROM node n
+        LEFT JOIN field_data_field_url ON n.nid = field_data_field_url.`entity_id`
+        WHERE n.uuid = '" . $this->uuid ."'";
       
-      // start processing the url
-      // Connect to postGIS
-      $this->connection = columby_postgis_connect();
+      $result = mysql_query($sql,$this->connection);
 
-      // Clear existing data in queue. Each queue item starts from scratch. 
-      $this->dbq_put("stats", NULL);
-      $this->dbq_put("data", NULL);
-      $this->dbq_put("total", NULL);
-      $this->dbq_put("split", NULL);
-      $this->dbq_put("error", NULL);
-      $this->dbq_put("processing", 1);
-      message("Processing columns queue table cleared. "); 
-
-
-      // get stats
-      message("************** GET stats: **************");
-      $stats = $this->get_stats();
-      if ($stats) {
-        message("Stats received. "); 
-        // put in database
-        $this->dbq_put("stats", $stats);
-        // put in local var, used for processing
-        $this->stats = json_decode($stats);  
-
+      // Process results
+      if (!$result) {
+        message("ArcGIS: Error Fetching data from CMS: " . mysql_error(),'log','ERROR');
       } else {
-        message("Did not receive any stats. "); 
-        $this->dbq_put("processing","0");
-        $this->dbq_put('error', 'Did not receive any stats. '); 
 
-        return FALSE; // something went wrong, report back to render()
+        $row = mysql_fetch_assoc($result);
+        $this->url = $row["field_url_url"]; 
+        message("ArcGIS: Starting the process of node with uuid $this->uuid and url: $this->url. ",'log','NOTICE');
+        
+        if(empty($this->url)){
+          message("ArcGIS: The url that should be processed is empty or doesn\'t exist. ",'log','ERROR');
+        } else {
+          // start processing the csv-file
+          $this->process();
+        }
       }
 
-
-      // get ids
-      message("************** GET IDS: **************");
-      $ids = $this->get_ids();
-      if ($ids) {
-        message("IDs Received. ");
-        // put in database
-        $this->dbq_put("data",$ids);  
-        // put in local var, used for processing
-        $this->data = $ids; 
-
-      } else {
-        message("Did not receive any IDs. ");
-        $this->dbq_put("processing","0");
-        $this->dbq_put('error', 'Did not receive any IDs. '); 
-
-        return FALSE; // something went wrong, report back to render()
+      // End of processing data, update status
+      $el = get_errorlog();
+      if (count($el) > 0) {
+        $el = implode("\n", $el);
+        $this->update_queue('error', $el);
       }
 
-
-      // get total
-      message("************** GET TOTAL: **************");
-      $total = $this->get_total();
-      if ($total) {
-        message("Totals received. "); 
-        // put in database
-        $this->dbq_put("total", $total);  
-        // put in local var, used for processing
-        $this->total = $total; 
-      } else {
-        message("Did not receive totals. ");
-        $this->dbq_put("processing","0");
-        $this->dbq_put("error", 'Did not receive total');
-
-        return FALSE; // something went wrong, report back to render()
-      }
-
-      // Start the processing of all objects
-      message("************** DBQ_GO: **************");
-      $finished= $this->dbq_go();
-
-      // Clear vars
-      $this->stats = ''; 
-      $this->data = ''; 
-      $this->total = ''; 
-      $this->split = ''; 
-
-      $this->dbq_put("processing", 0); 
-
-      if(!$finished){
-        $this->dbq_put("processing","0");
-        $this->dbq_put("error","Something went wrong in dbq_go...");
-        message("*** ERROR *** putting queue item in state of error, processing set to 0");
-
-        return FALSE; // something went wrong, report back to render()
-
-      } else {
-
-        $this->dbq_put("processing","0");
-        $this->dbq_put("done","1");
-        $this->dbq_put("error", NULL);
-        message("FINISHED parsing: No errors, queue item set to DONE=1, processing=0");
-
-        message("Constructing and saving file for this service. "); 
-        $file = create_csv_file(); 
-        // save file info into drupal. 
-
-
-        return TRUE;
-
-      };
+      $this->update_queue('done', "1");
+      $this->update_queue('processing', "0");
     }
   }
+
+
+  /**
+   * Process the arcGIS url
+   **/
+  function process(){
+      
+    // start processing the url
+    
+    // get stats
+    message("************** GET stats: **************",'log','NOTICE');
+    $stats = $this->get_stats();
+    if ($stats) {
+      message("Stats received. ",'log','NOTICE'); 
+      // put in database
+      $this->update_queue("stats", $stats);
+      // put in local var, used for processing
+      $this->stats = json_decode($stats);
+
+    } else {
+      message("Did not receive any stats. ",'log','ERROR');
+      return FALSE; // something went wrong, report back to render()
+    }
+
+
+    // get ids
+    message("************** GET IDS: **************",'log','NOTICE');
+    $ids = $this->get_ids();
+    if ($ids) {
+      message("IDs Received. ",'log','NOTICE');
+      // put in database
+      $this->update_queue("data",$ids);  
+      // put in local var, used for processing
+      $this->ids = explode(',', $ids);
+    } else {
+      message("Did not receive any IDs. ",'log','ERROR');
+      return FALSE; // something went wrong, report back to render()
+    }
+
+
+    // get total
+    message("************** GET TOTAL: **************",'log','NOTICE');
+    $total = $this->get_total();
+    if ($total) {
+      message("Totals received. ",'log','NOTICE');
+      // put in database
+      $this->update_queue("total", $total);  
+      // put in local var, used for processing
+      $this->total = $total; 
+    } else {
+      message("Did not receive totals. ",'log','NOTICE');
+      return FALSE; // something went wrong, report back to render()
+    }
+
+    // Create table
+    message("************** CREATING TABLE **************",'log','NOTICE');
+    $db = $this->create_table(); 
+    if ($db){
+      message("Table created. ",'log','NOTICE');
+    } else {
+      message("Error creating table.",'log','ERROR');
+      return FALSE;
+    }
+
+    // Start the processing of all objects
+    message("************** STARTING SYNC **************",'log','NOTICE');
+    
+    $finished= $this->sync();
+
+    if(!$finished){
+      message("*** ERROR *** putting queue item in state of error",'log','ERROR');
+      return FALSE; // something went wrong, report back to render()
+    } else {
+      message("FINISHED parsing: No errors.",'log','NOTICE');
+      return TRUE;
+    };
+  } 
 
 
   /** 
    * Main loop to process all items
    * 
    **/
-  function dbq_go(){
+  function sync(){
 
     // Get number of items to process per run. 
     $cycle = $this->cycle;
+    $cycles = ceil(count($this->ids)/$cycle);
+    message("Starting the sync of $cycles cycles of $cycle elements. ",'log','NOTICE');
 
-    // Create an array of the id string, stored in data
-    $ids = explode(",", $this->data);
-    
-    // Create chunks of remaining ids
-    $chunks = array_chunk($ids,$cycle);
-    
-    // Process each chunk 
-    // TODO Beter stukje erafhalen per keer? Wordt var steeds kleiner van ipv alles onthouden
-    $chunkCount = count($chunks); 
-    message("Starting the process of $chunkCount cycles of $cycle elements. "); 
+    $counter=0;
+    while (count($this->ids)>0){
+      $counter++;
+      $idList = array_splice($this->ids, 0 , $cycle); // ($array,offset,length)
 
-    for ($currentChunk=0; $currentChunk<$chunkCount; $currentChunk++) {
-      // Get records for this chunk
-      $chunkNumber = $currentChunk;
-      $chunkNumber++; 
+      message("Getting records for cycle $counter out of $cycles (Records ". ($counter -1)*$cycle . " to " . (($counter)*($cycle)) . ")",'log','NOTICE');
+      message("ArcGIS: items left in queue: ".count($this->ids),'log','NOTICE');
 
-      message("Getting records for chunk $chunkNumber (Records ". $currentChunk*$cycle . " to " . ($currentChunk*$cycle + $cycle) . ")");
+      $ids = join($idList, ",");
+      message('ArcGIS: Getting ids: ' . $ids,'log','NOTICE');
+      $records = $this->get_records($ids);
 
-      $records = $this->get_records(join($chunks[ $currentChunk],","));
       // get_records returns a string, convert to JSON object. 
       $records = json_decode($records);
 
-      //print_r($records);
-
       if (!$records) {
-        message("No records received for chunk $currentChunk");
+        message("No records received for chunk $currentChunk",'log','ERROR');
         return FALSE;
       } else {
-        // Records received
-        // create columns and table at first run
-        if ($currentChunk==0) {
-          message("Creating a new table for this set. "); 
-          $columnNames = []; 
-          $columnTypes = [];
-          
-          // if ObjectID is not returned, add it as the first column. 
-          $a = $records->fields;
-          $idFound=false;
-          foreach($a as $key){
-            if ($key->name == 'OBJECTID') {
-              $idFound = true; 
-              message("*** Found ObjectID. ");
-            } else { }
-          }
-          if ($idFound) {
-            $this->objectidPresent = TRUE; 
-          } else {
-            message("*** ObjectID Not Found. "); 
-            $columnNames[] = "OBJECTID";
-            $columnTypes[] = "text";
-            $this->objectidPresent = FALSE; 
-            message('ObjectID is not returned, adding column.');  
-          }
-          
+        message("Sending cycle $counter with " . count($records->features) . " id's to insert_rows. ",'log','NOTICE');
 
-          // process each field 
-          foreach($records->fields as $f){
-            // convert esri types to postgis types
-            $type = $this->esriconvertable[$f->type];
-            $value = $f->name;
-            // create column for the type
-            $columnNames[] = $value;
-            $columnTypes[] = $type;
-          }
-          //message(print_r($columnNames));
-          //message(print_r($columnTypes));
-
-          // add objectid, geometry and dates
-          $columnNames[] = "the_geom";
-          $columnTypes[] = "geometry";
-          $columnNames[] = "createdAt";
-          $columnTypes[] = "timestamp";
-          $columnNames[] = "updatedAt";
-          $columnTypes[] = "timestamp";
-
-          $sqlcolumns = [];
-          // Sanitize the column values;
-          $columnNames = $this->sanitize_columns($columnNames); 
-
-          // TODO check for equal length?
-          for ($i=0; $i<count($columnNames); $i++) {
-            $sqlcolumns[ $i] = $columnNames[ $i] . " " . $columnTypes[ $i]; 
-          }
-          // join columns into query string 
-          $columnstring = join($sqlcolumns,",");
-          
-          // put in db
-          $result = $this->pgdb_create_table($columnstring); // TODO with pgq() directly
-          
-          if ($result == FALSE) {
-            message("Error creating table. "); 
-            $this->dbq_put("processing","0");
-            $this->dbq_put('error', "Error creating table. "); 
-
-            // stop deze functie, false terug naar render()
-            return FALSE;  
-
-          } else {
-            message('Table created: ' . $result); 
-            $this->columnNames = $columnNames; 
-            $this->columnTypes = $columnTypes; 
-            message('Column names: ' . $columnstring); 
-          }
+        $result = $this->process_records($records, $idList);
+        if ($result == FALSE) {
+          message("Error during syncing. Stopping the process.",'log','NOTICE');
+          return FALSE;
         }
-
-        message("Sending batch $currentChunk with " . count($chunks[$currentChunk]) . " id's to insert_rows. "); 
-
-        // Send the results to the insert to database function
-        // TODO Also send the array with ids we are working with...
-        $result = $this->pgdb_insert_rows($records, $chunks[ $currentChunk]);
-
-        message("MEMORY USAGE: ".hr_memory_usage());
-        message("result pgdb_insert_rows: $result"); 
+        message("MEMORY USAGE: ".hr_memory_usage(),'log','NOTICE');
+        message("Sync result: $result",'log','NOTICE');
       }
     } 
 
-    message ("Processed all chunks. "); 
+    message("Processed all ids. ",'log','NOTICE');
+
     return TRUE; 
+  }
+
+
+  function create_table(){
+    message("Creating a new table for this set. ",'log','NOTICE');
+    
+    $stats = $this->stats; 
+    foreach($stats->fields as $f){
+      
+      // convert esri types to postgis types
+      $this->columns['"' . $f->name . '"'] = $this->esriconvertable[$f->type];
+      
+      // check for objectid
+      if (strtolower($f->name) == 'objectid') {
+        $this->objectidPresent = TRUE;
+        message("Found ObjectID. ",'log','NOTICE');
+      }
+    }
+
+    if(!$this->objectidPresent) {
+      message("ObjectID Not Found, adding it to columns. ",'log','NOTICE');
+      // Add objectID to beginning of array
+      $this->columns['"OBJECTID"'] = "text";
+    }
+    $this->columns['the_geom'] = "geometry"; 
+    $this->columns['"createdAt"'] = "timestamp";
+    $this->columns['"updatedAt"'] = "timestamp";
+
+    $fields = array();
+    foreach ($this->columns as $key => $value) {
+      $fields[] = $key . " " . $value;
+    }
+
+    // join columns into query string 
+    $columnstring = join($fields,",");
+    $sql="CREATE TABLE IF NOT EXISTS $this->tablename (cid serial PRIMARY KEY, $columnstring);"; 
+    message("Creating table: $sql",'log','NOTICE');
+    
+    $pgResult = postgis_query($sql); 
+    
+    if ($pgResult) {
+      message("Table created.",'log','NOTICE');
+      $this->columnNames = $fields;
+      return TRUE;
+    } else {
+      message('Error creating table.','log','NOTICE');
+      return FALSE; 
+    }
   }
 
   /** 
@@ -348,154 +312,217 @@ class scraper {
    * Output: TRUE or FALSE
    *
    **/
-  function pgdb_insert_rows($records, $current_ids){
+  function process_records($records, $idList){
     
     $recordCount = count($records->features); 
-    $idCount = count($current_ids); 
-    message("Records: $recordCount, idCount: $idCount. "); 
+    $idCount = count($idList); 
 
     //check if records and currentIds count match .. .
     if ( $recordCount != $idCount) {
-      message(print_r($records,true));
-      message("Error: Records ($recordCount) and current Ids ($idCount) do not match. "); 
+      message("Error: Records ($recordCount) and current Ids ($idCount) do not match. ",'log','NOTICE');
       return FALSE; 
     }
 
+    message("Starting the process of $recordCount records. ",'log','NOTICE'); 
+
     // array for all value rows. 
-    $valueLines = []; 
+    $keys = [];
+    $values = []; 
 
-    // Process each feature
-    for($i=0; $i<$recordCount; $i++){
-      
+    // Process each feature (row)
+    for($i=0; $i<count($records->features); $i++){
       if($records->features[$i]){
-
-        $values = array_values(get_object_vars($records->features[$i]->attributes));
-        
-        // add objectID as the first item in the array if it is not returned from the service. 
-        //message("*** ObjectID Present: "); 
-        //message($this->objectidPresent); 
-        if (!$this->objectidPresent) {
-          //message("OBJECTID is not returned by the service, using the current_id. "); 
-          array_unshift($values, $current_ids[$i]);
-        }
-
-        // Escape input values
-        foreach($values as $k => $v){
-          $v = is_null($v) ? "null" : "'". pg_escape_string($v) ."'";
-          $escaped_values[$k] = $v;
-        }
-        $values = $escaped_values; 
-
-        // Get geometry data from response
-        $g = get_object_vars($records->features[$i]->geometry);
-        // get the keys
-        $gk = array_keys($g); 
-        // get the values
-        $gv = array_values($g); 
-        // wkt POINT(lon lat) == POINT(x y) == POINT(4.3 52.0)
-        //message(print_r($gk['rings']));
-        if (($gk[0] == 'x') && ($gk[1] == 'y')) {
-          $wkt = "ST_GeomFromText('POINT(" . $gv[0] . " " . $gv[1] .")', 4326)"; 
-          $values[] = $wkt; 
-        } elseif($gk[0] == 'rings') {
-          /*
-          "features": [{
-              "attributes": {
-                "BUURTCODE": "44"
-              },
-              "geometry": {
-                "rings": [
-                  [
-                    [
-                      78889.131000001,
-                      455079.796
-                    ],
-                    [
-                      78914.4580000006,
-                      455092.798
-                    ],
-          */
-          $rings = $gv[0]; 
-          $items = $rings[0];
-          $pointArray = []; 
-          for ($j=0; $j<count($items); $j++) {
-            $point = $items[$j]; 
-            $pointArray[] = $point[0] . " " .  $point[1];
+        // get keyed array of values
+        $a = $this->process_data($records->features[$i], $idList[$i]);
+        // get keys from first feature
+        if ($i==0){
+          $keys = array_keys($a);
+          // escape keys and values
+          foreach ($keys as $key=>$value) {
+            $keys[$key] = '"'.$value.'"';
           }
-          $pointString = implode(",", $pointArray); 
-          $wkt = "ST_GeomFromText('POLYGON((" . $pointString . "))', 4326)";
-          $values[] = $wkt;
-        } else {
-          $values[] = NULL;
         }
-
-        // process dates
-        date_default_timezone_set('UTC');
-        $values[] = "'" . date('Y-m-d H:i:s') . "'";  // createdAt
-        $values[] = "'" . date('Y-m-d H:i:s') . "'";  // updatedAt
-
-        //message(print_r($values)); 
-
-        // Create string from escaped values
-        $values  = implode(", ", $values);
-
-        $valueLines[] = "(" . $values . ")"; 
+        // escape values except 'NULL' and the_geom column
+        foreach ($a as $key => $value) {
+          if (($value != 'NULL') && ($key != 'the_geom')) {
+            $escaped_value = pg_escape_string($value);
+            $a[$key] = "'". $escaped_value ."'";
+          }
+        }
+        $values[] = "(" . implode(",",array_values($a)) . ")"; 
+      } else {
+        //message('feature does not exist','log','NOTICE');
       }
     }
-    
-    $valueLines = implode(", ", $valueLines); 
-    //message("valueLines: " . $valueLines); 
 
-    $columns = implode(", ", $this->columnNames);
+    $sql = 'INSERT INTO ' . $this->tablename . ' (' . implode(',',$keys) . ") VALUES " . implode(',',$values) . ";";
+    message("Constructed SQL: " . $sql,'log','DEBUG');
 
-    $sql = "INSERT INTO $this->tablename ($columns) VALUES $valueLines;";
-    
-    //message("Sending sql: $sql"); 
-    
-    $q = pgq($sql);
-    if ($q == FALSE) {
-      message("Error saving "); 
+    $pgResult = postgis_query($sql);
+    if ($pgResult) {
+      message("Saved values to postGIS",'log','NOTICE');
     } else {
-      message("Saved values to postGIS"); 
+      message("Error saving ",'log','ERROR');
+      return FALSE;
     }
     
     $this->split += $recordCount; 
-    $this->dbq_put("split",$this->split);
+    $this->update_queue("split",$this->split);
     $percentage = round($this->split/($this->total/100),2);
-    $this->dbq_put("processed","$percentage");
-    message("*** ------ Insert update information: ------ "); 
-    message("*** $recordCount inserts for " . $this->uuid . " ::: $percentage% ($this->split of $this->total)");
+    $this->update_queue("processed","$percentage");
+    message("*** ------ Insert update information: ------ ",'log','NOTICE');
+    message("*** $recordCount inserts for " . $this->uuid . " ::: $percentage% ($this->split of $this->total)",'log','NOTICE');
     
     return TRUE; 
   }
 
-  /** 
-   * Create a postgis table
-   * 
-   * @param string
-   *   with columns
-   * 
-   * @return string
-   *   string with result (json form) or FALSE
-   **/ 
-  function pgdb_create_table($columns){
+  function process_data($record, $id){
+    
+    //initialize data
+    $attributes = get_object_vars($record->attributes);
+    $attribute_keys = array_keys($attributes); 
+    $attribute_values = array_values($attributes);    
 
-    $sql="CREATE TABLE IF NOT EXISTS $this->tablename (cid serial PRIMARY KEY, $columns);"; 
-    message("Creating table: $sql"); 
-    $q = pgq($sql); 
+    //message('Data keys: ' . implode(',',$attribute_keys),'log','DEBUG');
+    
+    // add objectID as the first item in the array if it is not returned from the service. 
+    if (!array_key_exists('OBJECTID',$attributes)) {
+      //message("OBJECTID is not returned by the service, using the current_id.",'log','DEBUG');
+      $attributes['OBJECTID'] = $id;
+    } else {
+      //message("OBJECTID is returned by the service.",'log','DEBUG');
+    }
 
-    return $q; 
+    // Escape input values
+    foreach($attributes as $key=>$value){
+      $value = is_null($value) ? "null" : pg_escape_string($value);
+      $attributes[$key] = $value;
+    }
+    
+    // Process geometry
+    $geometry = get_object_vars($record->geometry);
+    $geometry_keys = array_keys($geometry); 
+    $geometry_values = array_values($geometry); 
+    // wkt POINT(lon lat) == POINT(x y) == POINT(4.3 52.0)
+    if (($geometry_keys[0] == 'x') && ($geometry_keys[1] == 'y')) {
+      $wkt = "ST_GeomFromText('POINT(" . $geometry_values[0] . " " . $geometry_values[1] .")', 4326)"; 
+    } elseif($geometry_keys[0] == 'rings') {
+      /*
+      "features": [{
+          "attributes": {
+            "BUURTCODE": "44"
+          },
+          "geometry": {
+            "rings": [
+              [
+                [
+                  78889.131000001,
+                  455079.796
+                ],
+                [
+                  78914.4580000006,
+                  455092.798
+                ],
+      */
+
+      $rings = $geometry_values[0]; 
+      $items = $rings[0];
+      $pointArray = []; 
+      for ($j=0; $j<count($items); $j++) {
+        $point = $items[$j]; 
+        $pointArray[] = $point[0] . " " .  $point[1];
+      }
+      $pointString = implode(",", $pointArray); 
+      $wkt = "ST_GeomFromText('POLYGON((" . $pointString . "))', 4326)";
+
+      message (print_r($geometry),'log','NOTICE');
+
+    } elseif ($geometry_keys[0] == 'points') {
+      
+      message('found a multipoint','log','NOTICE');
+      message('geometry values: '. implode(',',$geometry['points'][0]),'log','NOTICE');
+      
+      $point = $geometry_values['points'][0];
+      message('point' . implode(',',$geometry['points'][0]),'log','NOTICE');
+      
+      $wkt = "ST_GeomFromText('POINT(" . implode(' ',$geometry['points'][0]) . ")', 4326)";
+      message('wkt' . $wkt,'log','NOTICE');
+
+    } elseif ($geometry_keys[0] == 'paths') {
+      /*
+      Array(
+        [0] => Array(
+          [0] => Array(
+            [0] => 4.2329000622957
+            [1] => 52.059222035529
+          )
+          [1] => Array(
+            [0] => 4.2318033708134
+            [1] => 52.059160187838
+          )
+          [2] => Array(
+            [0] => 4.2318008523102
+            [1] => 52.059160010292
+          )
+        )
+      )
+      */
+
+      message('IATI: Found polylines (linestring)','log','message, service, severity');
+      //message(print_r($geometry['paths']),'log','DEBUG');
+
+      $lines=[]; 
+      // Process each line (mostly one, but could be multiple)
+      foreach ($geometry['paths'] as $key => $line) {
+        message("IATI: Polyline $key",'log','DEBUG');
+        //message(print_r($line),'log','DEBUG');
+        $points=[];
+        // Process each point in the line
+        foreach ($line as $k => $point) {
+          //message("IATI: Point $key:",'log','DEBUG');
+          //message(print_r($point),'log','DEBUG');
+          // convert point array to string
+          $point = implode(' ', $point);
+          message("IATI: Point $k value: $point",'log','DEBUG');
+          $points[] = $point;
+        }
+        // create linestring from points array
+        $points = "(" . implode(',', $points) . ")";
+        $lines[] = $points;
+        message("IATI: Linestring value: $points",'log','DEBUG');
+      }
+      // convert linestring array to string
+      $lines = implode(',', $lines);
+      message("IATI: Lines: $lines",'log','DEBUG');
+      $wkt = "ST_GeomFromText('MULTILINESTRING(" . $lines . ")', 4326)";
+      message("IATI: wkt: $wkt",'log','DEBUG');      
+
+    } else {
+      message('Found a geometry field, but unable to process.','log',"NOTICE");
+      $wkt = 'NULL';
+    }
+    $attributes['the_geom'] = $wkt;
+    //message('Added geometry: ' . $wkt, 'log','DEBUG');
+
+    // process dates
+    date_default_timezone_set('UTC');
+    $attributes['createdAt'] = date('Y-m-d H:i:s');
+    $attributes['updatedAt'] = date('Y-m-d H:i:s');
+    
+    return $attributes;
   }
 
+
+  
+
   // check input value? 
-  function dbq_put($col,$val){
-    $table = $this->q->queue_table;
-    $id = $this->q->array['ID'];
+  function update_queue($col,$val){
+    $id = $this->job['ID'];
     $val = addslashes($val); 
-    mysql_query("UPDATE $table SET $col='$val' WHERE ID='$id'",$this->q->connection) or die(mysql_error());
+    mysql_query("UPDATE columby_queue SET $col='$val' WHERE ID='$id'",$this->connection) or die(mysql_error());
     $this->q->array[$col] = $val;
 
-    message("Queue column '$col' updated to '" . substr($val, 0, 100) . " (sample)"); 
+    message("Queue column '$col' updated to '" . substr($val, 0, 100) . " (sample)",'log','NOTICE');
   }
 
   function db_close(){
@@ -510,7 +537,7 @@ class scraper {
    *   String with json result or FALSE
    **/
   function get_stats(){
-    message("Getting stats... ");
+    message("Getting stats... ",'log','NOTICE');
 
     $params = array(
       "f" => "json",
@@ -528,7 +555,6 @@ class scraper {
     }
   } 
 
-
   /** 
    * Get all Object IDs from a given q->url
    * 
@@ -537,7 +563,7 @@ class scraper {
    **/
   function get_ids(){
 
-    message("get all objectIds.");
+    message("get all objectIds.",'log','NOTICE');
 
     $params = array(
       "f"             => "pjson",
@@ -602,7 +628,7 @@ class scraper {
    **/
   function get_records($ids){
 
-    message("Getting record information for arcGIS service version: " . $this->stats->currentVersion);
+    message("Getting record information for arcGIS service version: " . $this->stats->currentVersion,'log','NOTICE');
 
     if($this->stats->currentVersion=="10.04"){
       $params = array(
@@ -664,21 +690,18 @@ class scraper {
     $q = "$pre?".join($q,"&");
 
     // print query always to monitor external connections
-    $sample = strval(substr($this->url.$q, 0, 150));
-    message("external server query: ".$sample);
+    message("Server query: ".$this->url.$q,'log','DEBUG');
 
     $result = file_get_contents($this->url.$q);
 
-    message("return type: " . gettype($result)); 
-    //message("Result: $result");
-    $sample = strval(substr($result, 0, 100)); 
-    message("getting: $sample [...]"); 
+    message("return type: " . gettype($result),'log','DEBUG');
+    //message("Response result: $result",'log','DEBUG');
 
     return $result; 
   }
 
   function sanitize_columns($columns) {
-    message(print_r($columns));
+    message(print_r($columns),'log','NOTICE');
     $fields = array(); 
     foreach ($columns as $field) {
       $field = str_replace(' ', '_', $field);
@@ -690,39 +713,6 @@ class scraper {
     //message(print_r($fields));
 
     return $fields;
-  }
-
-
-  /**
-   * Create a CSV file from the table. Used at the end of the processing cycle.
-   * @return array
-   *   array with file details (path, name)
-   **/
-  function create_csv_file() {
-    /*
-    cd /usr/local/pgsql
-    mkdir csv
-    chown postgres csv
-    chmod 755 csv
-    ls -la
-    
-    COPY tablename
-    TO '/usr/local/pgsql/data/csv/header_export.csv'
-    WITH DELIMITER ‘,’
-    CSV HEADER
-    */
-    
-    // create a tmp file
-    //$file = fopen("home/arn/www/sites/default/files/datasets/tmp/$uuid_tmp.csv", "w"); 
-    // add headers
-
-    // query, on success, save results to file 
-    //this.uuid = $("#table-js").attr("uuid").replace(new RegExp("-","gm"),"_");
-    //queryurl = deze.root+'api/data/'+uuid+'/schema.json'
-
-    // save file permanently 
-
-    // attach to node
   }
 }
 ?>
