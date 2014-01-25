@@ -47,13 +47,32 @@ function process_job(){
   message("---------------------------------- Start processing data ---------------------------------- ",'log','NOTICE');
   
   // Initialize api
+  message("Connecting to the Drupal API ... ",'log','NOTICE');
   global $drupaluser;
   $api = new DrupalREST($drupaluser['endpoint'], $drupaluser['username'], $drupaluser['pass']);
-  if ($api->login()){
-    message("Connected to the Columby API",'log','NOTICE');
+  // get the required csrf token
+  $api_token = $api->request_token();
+  message('API CSRF Token: ' . $api_token,'log','NOTICE');
+  // connect to the api
+  $api_connection = $api->connect(); 
+  message('API Connection user id: ' . $api_connection['uid'],'log','NOTICE');
+  // log in if user is not connected
+  $uid = $api_connection['uid'];
+  if ($uid === 0) {
+    message('Columby worker is not logged in via API. Logging in.','log','NOTICE');
+    $api_login = $api->login();
+    $uid = $api_login['uid'];
+    message('Columby worker is logged in with uid: ' . $uid,'log','NOTICE');
   } else {
-    message("Error connecting to the Columby API",'log','ERROR');
+    message('Columby worker is logged in with uid: ' . $uid,'log','NOTICE');
   }
+  
+  if ($uid === 0){
+    // not connected to the api, stop the process. 
+    message('Error connecting to the Columby API','log','DEBUG');
+    return false; 
+  }
+
 
   //** CREATE JOB ITEM **//
   // Create a new queue with the new item to be processed inside.
@@ -69,9 +88,9 @@ function process_job(){
   // $field_data_worker_status = 'in_progress';
   $fields=['worker_status'=>'in progress'];
   $r = $api->update($uuid, $fields); 
-  if ($r){
-    message("Sent 'in progress' worker status to the ColumbyAPI. ",'log','NOTICE');
-  }
+  message(print_r($r),'log','NOTICE');
+  message("Sent 'in progress' worker status to the ColumbyAPI. ",'log','NOTICE');
+  
 
   //** DROP EXISTING TABLE **//
   // Drop the table if it exists
@@ -148,7 +167,7 @@ function process_job(){
   //$field_data_worker_status
   $fields=[];
   $fields['worker_status'] = 'finished';
-  message($parsed->geo,'log','NOTICE');
+  //message($parsed->geo,'log','NOTICE');
 
   $geo = $parsed->geo;
   if ($geo=='1') {
@@ -173,9 +192,14 @@ function process_job(){
     message("No errors found during processing. Success!",'log','NOTICE');
   }
   
-  if ($api->update($uuid, $fields)){
-    message("Updated the node worker status to " . $fields['worker_status'],'log','NOTICE');
+  // add sync data for API
+  if (isset($parsed->sync_date)){
+    $fields['sync_date'] = $parsed->sync_date;
   }
+  // Send all fields to the API
+  $r = $api->update($uuid, $fields);
+  message(print_r($r),'log','NOTICE');
+  message("Updated the node worker status to " . $fields['worker_status'],'log','NOTICE');
 
   message("---------------------------------- ------------------------ ---------------------------------- ",'log','NOTICE');
   message("---------------------------------- Finished processing data ---------------------------------- ",'log','NOTICE');

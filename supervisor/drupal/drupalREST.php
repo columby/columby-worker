@@ -2,124 +2,107 @@
 
 class DrupalREST {
 
+  var $endpoint;
   var $username;
   var $password;
   var $session;
-  var $endpoint;
+  var $user;
+  var $csrf_token;
 
   function __construct($endpoint, $username, $password) {
 
-      $this->username = $username;
-      $this->password = $password;
-      $this->endpoint = $endpoint;
+    $this->username = $username;
+    $this->password = $password;
+    $this->endpoint = $endpoint;
   }
 
+
+  // Get the required csrf-token
+  function request_token(){
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $this->endpoint . 'user/token.json');
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, 'some=field');
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HEADER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER,array(
+      "Accept: application/json",
+      "Content-Type: application/json",
+      "Cookie:" . $this->session
+    ));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = json_decode(curl_exec($ch),true);
+    curl_close($ch);
+    $this->csrf_token = (array_key_exists('token', $response)) ? $response['token'] : false;
+    
+    message("CSRF toke received: " . $this->csrf_token,'log','NOTICE');
+    return $this->csrf_token;
+  }
+
+
+  // Connect to the columby API to check login status and api availability
+  function connect() {
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $this->endpoint . 'system/connect.json');
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, 'some=field');
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_HEADER, false);
+    curl_setopt($ch, CURLOPT_HTTPHEADER,array(
+      "Accept: application/json",
+      "Content-Type: application/json",
+      "X-CSRF-Token: " . $this->csrf_token
+    ));
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = json_decode(curl_exec($ch),true);
+    curl_close($ch);
+    
+    $this->session = $response['session_name'] . '=' . $response['sessid'];
+    $this->user = $response['user'];
+
+    return $this->user;
+  }
+
+
+  // Login
   function login() {
 
-    $output = FALSE; 
-
-    $ch = curl_init($this->endpoint . 'user/login.json');    
+    $ch = curl_init();
     $post_data = array(
       'username' => $this->username,
       'password' => $this->password,
     );
-    $post = http_build_query($post_data, '', '&');
+    $post_data = http_build_query($post_data, '', '&');
 
-    // against https Curl error: SSL certificate problem: self signed certificate in certificate chain
+    curl_setopt($ch, CURLOPT_URL, $this->endpoint . 'user/login.json');
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_HEADER, false);
     curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
     curl_setopt($ch, CURLOPT_HTTPHEADER,array (
-      "Accept: application/json",
-      "Content-type: application/x-www-form-urlencoded"
+      "Accept: application/x-www-form-urlencoded",
+      "Content-Type: application/x-www-form-urlencoded",
+      "X-CSRF-Token: " . $this->csrf_token
     ));
 
-    $response = json_decode(curl_exec($ch));
-    message("response: ". serialize($response),'log','DEBUG');
-
-    //Save Session information to be sent as cookie with future calls
-    if ($response->session_name && $response->sessid){
-      $this->session = $response->session_name . '=' . $response->sessid;
-    
-      // GET CSRF Token
-      curl_setopt_array($ch, array(
-        CURLOPT_RETURNTRANSFER => 1,
-        CURLOPT_URL => $this->endpoint . 'user/token.json',
-      ));
-      curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-      curl_setopt($ch, CURLOPT_COOKIE, "$this->session"); 
-      
-      $ret = new stdClass;
-      $ret->response = json_decode(curl_exec($ch));
-      $ret->error    = curl_error($ch);
-      $ret->info     = curl_getinfo($ch);
-      $t= $ret->response;
-      $this->csrf_token = $t->token;
-      if ($this->csrf_token){
-        return TRUE;
-      }
+    $response = json_decode(curl_exec($ch),true);
+    if ($response['session_name'] && $response['sessid']){
+      $this->session = $response['session_name'] . '=' . $response['sessid'];
+      message('session: ' . $this->session,'log','NOTICE');
     }
-
-    /*
-    // first get a token, needed when there is a session
-    $ch = curl_init($this->endpoint . 'user/token.json');    
-    $post_data = array();
-    $post = http_build_query($post_data, '', '&');
-
-    // against https Curl error: SSL certificate problem: self signed certificate in certificate chain
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HEADER, false);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-    curl_setopt($ch, CURLOPT_HTTPHEADER,array (
-      "Accept: application/json",
-      "Content-type: application/x-www-form-urlencoded"
-    ));
-
-    $response = json_decode(curl_exec($ch));
-    message("response: ". serialize($response));
-    message('Curl error: ' . curl_error($ch));
-  */
-    // get token
-    /*
-    if ($response->token) {
-      message('Received token (using existing session): ' . $response->token); 
-      $this->csrf_token = $response->token;
-
-      $ch = curl_init($this->endpoint . 'system/connect.json');
-      $post_data = array();
-      $post = http_build_query($post_data, '', '&');
-      $response = json_decode(curl_exec($ch));
-
-      //Save Session information to be sent as cookie with future calls
-      if ($response->session_name && $response->sessid){
-        $this->session = $response->session_name . '=' . $response->sessid;
-        return TRUE; 
-      }
-
-    } else {
-      message('No token received, logging in.');
-
-      $ch = curl_init($this->endpoint . 'user/login.json');
-      $post_data = array(
-        'username' => $this->username,
-        'password' => $this->password,
-      );
-      $post = http_build_query($post_data, '', '&');
-      $response = json_decode(curl_exec($ch));
-
-      message('response: '); 
-      message(serialize($response));
-      
-      
+    if ($response['user']){
+      $this->user = $response['user'];
+      //message('user: ' . print_r($this->user),'log','NOTICE');
     }
-    */
+    // get new token
+    $token = $this->request_token();
+
+    return $this->user;
   }
+
 
   // Retrieve a node from a node id
   function retrieve($uuid) {
@@ -143,26 +126,33 @@ class DrupalREST {
       return $result;
   }
 
+
   function update($uuid, $node) {
 
     $post = http_build_query($node, '', '&');
     $ch = curl_init($this->endpoint . 'worker/'.$uuid.'.json');
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "PUT"); // Do an UPDATE PUT POST
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-    curl_setopt($ch, CURLOPT_HEADER, TRUE);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HEADER, FALSE);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $post);
-    curl_setopt($ch, CURLOPT_HTTPHEADER,
-    array (
+    curl_setopt($ch, CURLOPT_HTTPHEADER,array (
       "Accept: application/json",
       "Content-type: application/x-www-form-urlencoded",
-      "Cookie: $this->session",
-      'X-CSRF-Token: ' .$this->csrf_token
+      "Cookie: " . $this->session,
+      'X-CSRF-Token: ' . $this->csrf_token
     ));
 
-    $result = $this->_handleResponse($ch);
+    $result = json_decode(curl_exec($ch),true);
+    message('drupalrest update: ','log','NOTICE');
+    message(print_r($result, true),'log','NOTICE');
+
+    return $result; 
+
+    $this->_handleResponse($ch);
 
     curl_close($ch);
+    message($result,'log','NOTICE'); 
 
     return $result;
   }
