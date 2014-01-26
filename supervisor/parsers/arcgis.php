@@ -17,6 +17,7 @@ class scraper {
   public $geo;           // is the set geodata? 
   public $worker_error;   // Text with error to send to API
   public $worker_status;  // Status of the worker
+  public $sync_date;
 
   // Number of items to query per request
   public $cycle = 100;
@@ -126,7 +127,8 @@ class scraper {
         $el = implode("\n", $el);
         $this->update_queue('error', $el);
       }
-
+      $this->sync_date = date('Y-m-d H:i:s', strtotime('now'));
+      
       $this->update_queue('done', "1");
       $this->update_queue('processing', "0");
     }
