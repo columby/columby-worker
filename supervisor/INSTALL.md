@@ -11,7 +11,7 @@ The supervisor package from the debian repository does not seem to work properly
     $ sudo easy_install pip
     $ sudo pip install supervisor
     $ sudo su root
-    $ echo_supervisord_conf > /etc/supervisord.conf
+    $ 	
     $ exit
     $ sudo nano /etc/supervisord.conf
 
