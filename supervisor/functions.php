@@ -14,9 +14,12 @@ require_once("drupal/drupalREST.php");
 require_once("logger/logger.php");
 
 // Set vars
-$processing=FALSE;  // Is there a job running?
+$processing = FALSE;     // Is there a job running?
 $job = array();          // Array with job information
 $logger; 
+$error = FALSE;
+$errors = array();
+
 
 /** 
  * Main function for processing the job-item
@@ -33,183 +36,179 @@ $logger;
  **/
 function process_job(){
 
-  global $processing, $job;
+  global $processing, $job, $logger, $errors, $error;
 
-  // initiate logger
-  global $logger;
   $logger = new Logger(); 
 
   // Start with clean job-object
   $job = [];
   
-  // Set processing car to true, since processing can take longer than the check_queue interval
+  // Set processing var to true, since processing can take longer than the check_queue interval
   $processing = TRUE;
-  message("---------------------------------- Start processing data ---------------------------------- ",'log','NOTICE');
-  
+  $logger->add("---------------------------------- --------------------- ---------------------------------- ");
+  $logger->add("---------------------------------- START PROCESSING JOB  ---------------------------------- ");
+  $logger->add("---------------------------------- --------------------- ---------------------------------- ");
+  $logger->add("--- Startdate: " . date('c'));
+
   // Initialize api
-  message("Connecting to the Drupal API ... ",'log','NOTICE');
+  $logger->add("--- CONNECTING TO THE COLUMBY API --------------------------------------------------------- ");
   global $drupaluser;
   $api = new DrupalREST($drupaluser['endpoint'], $drupaluser['username'], $drupaluser['pass']);
   // get the required csrf token
   $api_token = $api->request_token();
-  message('API CSRF Token: ' . $api_token,'log','NOTICE');
+  $logger->add("Columby API: token received.");
   // connect to the api
   $api_connection = $api->connect(); 
-  message('API Connection user id: ' . $api_connection['uid'],'log','NOTICE');
   // log in if user is not connected
   $uid = $api_connection['uid'];
+  
   if ($uid === 0) {
-    message('Columby worker is not logged in via API. Logging in.','log','NOTICE');
+    $logger->add("Columby API: No active session, logging in...");
     $api_login = $api->login();
     $uid = $api_login['uid'];
-    message('Columby worker is logged in with uid: ' . $uid,'log','NOTICE');
-  } else {
-    message('Columby worker is logged in with uid: ' . $uid,'log','NOTICE');
   }
+  
+  $logger->add("Columby API: Logged in with uid: " . $uid);
   
   if ($uid === 0){
     // not connected to the api, stop the process. 
-    message('Error connecting to the Columby API','log','DEBUG');
-    return false; 
+    $logger->add("Columby API: Error connecting to the Columby API");
+    $error = TRUE;
+    $errors[] = ' Error connecting to the Columby API';
   }
 
-
   //** CREATE JOB ITEM **//
-  // Create a new queue with the new item to be processed inside.
+  $logger->add("--- RETRIEVING JOB INFORMATION ------------------------------------------------------------ ");
   $retrieved_job = new Job();
   $job = $retrieved_job->job_data; 
   // uuid of the dataset node
   $uuid = $job['uuid'];
-  // postgis tablename for the dataset
   $tablename = "c".str_replace("-", "_", $uuid);
-
-  // update CMS Node fields (using columby service)
-  // Tell Drupal that node data is being processed. 
-  // $field_data_worker_status = 'in_progress';
-  $fields=['worker_status'=>'in progress'];
+  $logger->add("Updating the workers status to: In progress");
+  $fields = array(
+    'worker_status'=>'in progress'
+  );
   $r = $api->update($uuid, $fields); 
-  message(print_r($r),'log','NOTICE');
-  message("Sent 'in progress' worker status to the ColumbyAPI. ",'log','NOTICE');
+
+  $logger->add("Sent 'in progress' worker status to the ColumbyAPI. ");
   
 
   //** DROP EXISTING TABLE **//
-  // Drop the table if it exists
+  $logger->add("--- REMOVING EXISTING DATA ----------------------------------------------------------------- ");
   $sql = "DROP TABLE IF EXISTS $tablename";
   $result = postgis_query($sql);
   if (!$result) {
-    message("Error connecting to the database. Not processing the data. Trying again in 60 seconds.",'log','ERROR'); 
-    sleep(60);
-  } else {
+    $logger->add("Error connecting to the database. Not processing the data."); 
+    $error = TRUE; 
+    $errors[] = "Error when trying to remove existing database table. ";
+  } 
 
-    message("Cleared existing database. ",'log','NOTICE');
-
-    //** RESET QUEUE ITEM **//
+  // Clear existing database
+  if ($error === FALSE) {
+    $logger->add("Cleared existing database table.");
+    $logger->add("Resetting job parsing status"); 
     $retrieved_job->put("data","");
     $retrieved_job->put("stats","");
     $retrieved_job->put("split","0");
     $retrieved_job->put("total","");
+  }
 
-    // Determine the job-type and start processing (separate classes)
+  // Determine the job-type and start processing (separate classes)
+  if ($error === FALSE) {
+    $logger->add("--- STARTING PARSER --------------------------------------------------------- ");
     $type = $job['type']; 
-    
+    $logger->add('Determining job type. '); 
     switch ($type) {
-      /* 
-        0 = "csv"
-        1 = "arcgis10"
-        2 = "iati"; 
-      */
       case "0": //'csv':
         require_once("parsers/csv.php");
-        message("Job type: CSV. ",'log','NOTICE');
+        $logger->add("Job type: CSV.");
+        $logger->add("Initiating the CSV-parser.");
         $parsed = new csv($job);
       break;
       case "1": //'arcgis10':
         require_once("parsers/arcgis.php");
-        message("Job type: ARCGIS. ",'log','NOTICE');
+        $logger->add("Job type: arcgis.");
+        $logger->add("Initiating the arcgis-parser.");
         $parsed = new scraper($job);
       break;
       case "2": //'iati':
         require_once("parsers/iati.php");
-        message("Job type: IATI. ",'log','NOTICE');
+        $logger->add("Job type: iati.");
+        $logger->add("Initiating the iati-parser.");
         $parsed = new iati($job);
       break;
       case null: 
       $parsed = '';
-        message("No job-type found, skipping this task. ",'log','NOTICE');
+        $logger->add("No job-type found, skipping this task. ");
       break; 
     }
-
-    // Export table to csv-file if necessary
+  }
+  
+  // Export table to csv-file if necessary
+  if ($error === FALSE) {
     if (($type == "0")||($type == "1")){
-      message("Exporting table to file.",'log','NOTICE');
+      $logger->add("Exporting table to file. ");
       $file = postgis_export_table($uuid);
       if ($file) {
-        message("Export succeeded. ",'log','NOTICE');
-        // Send command to Columby API
-        $fields = [];
-        $fields['file'] = '/home/columby/exports/'.$uuid.'.csv';
+        $logger->add("Export succeeded.");
+        $fields = array(
+          'file' => '/home/columby/exports/'.$uuid.'.csv'
+        );
+        
         if ($api->update($uuid, $fields)){
-          message("Updated the file to " . $fields['file'],'log','NOTICE');
+          $logger->add("Updated the file to " . $fields['file']);
         }
+      
       } else {
-        message("Export error. ",'nolog','log','NOTICE');
+        $logger->add("CSV Export error.");
+        $error=TRUE;
+        $errors[] = "CSV Export error.";
       }
+    
     } else {
-      message("File is not saved as a table in the database, file-export is not needed. ",'log','NOTICE');
+      $logger->add("The dataset is not saved in the columby datastore. File-export is not needed.");
     }
-
-    message("Finished processing job " . $uuid . ' with type ' . $type,'log','NOTICE');
   }
 
-  // update CMS Node fields (using columby service)
-  //$field_data_geo
-  
-  //$field_data_worker_status
-  $fields=[];
-  $fields['worker_status'] = 'finished';
-  //message($parsed->geo,'log','NOTICE');
 
-  $geo = $parsed->geo;
-  if ($geo=='1') {
-    $geo = 1; 
-  } else {
-    $geo = 0; 
+  $fields = array(
+    'worker_status' => 'Finished', 
+    'sync_date' => date('Y-m-d H:i:s', strtotime('now'))
+  );
+  if ($parsed->geo){
+    $fields['geo'] = (int)$parsed->geo;
+    $logger->add("Setting geo to: " . $parsed->geo);
   }
-  message("Setting geo to ".$geo, 'log','NOTICE');
-  $fields['geo'] = $geo;
 
-  // check and log errors
-  $e = $logger->get_errorlog();
-
-  if (count($e)>0) {
+  // Check for errors
+  if (count($errors) > 0) {
+    $errorList = implode("\n", $errors);
+    $logger->add("--- Error report: "); 
+    $logger->add($errorList);
     $fields['worker_status'] = 'error';
-    $e = implode("\n", $e);
-    message("There where errors generated during processing:",'log','NOTICE'); 
-    message($e,'log','NOTICE');
-    $fields['worker_error'] = $e;
-
+    $fields['worker_error'] = $errorList;
   } else {
-    message("No errors found during processing. Success!",'log','NOTICE');
+    $logger->add("No errors found during processing.");
   }
+
+  // Finalize worker status
+  $logger->add("Setting worker-status to: " . $fields['worker_status']);
+  $logger->add("Setting sync date to: " . $fields['sync_date']);
   
-  // add sync data for API
-  if (isset($parsed->sync_date)){
-    $fields['sync_date'] = $parsed->sync_date;
-  }
   // Send all fields to the API
   $r = $api->update($uuid, $fields);
-  message(print_r($r),'log','NOTICE');
-  message("Updated the node worker status to " . $fields['worker_status'],'log','NOTICE');
-
-  message("---------------------------------- ------------------------ ---------------------------------- ",'log','NOTICE');
-  message("---------------------------------- Finished processing data ---------------------------------- ",'log','NOTICE');
-  message("---------------------------------- ------------------------ ---------------------------------- ",'log','NOTICE');
-
+  $logger->add("Worker status updated.");
+  
+  // Save the log file. 
   worker_log_save($job['uuid']);
 
-  $processing = FALSE;
+  $logger->add("---------------------------------- ------------------------ ---------------------------------- ");
+  $logger->add("---------------------------------- Finished processing data ---------------------------------- ");
+  $logger->add("---------------------------------- ------------------------ ---------------------------------- ");
 
+  $processing = FALSE;
 }
+
 
 /**
  * Check the queue for items to be processed. 
@@ -220,7 +219,7 @@ function check_queue(){
   // Only check when the processor is not running
   global $processing; 
   if ($processing) {
-    message("render already running. ",'log','NOTICE');
+    echo "There is already a job process running. \n";
     return FALSE; 
   }
 
@@ -229,25 +228,19 @@ function check_queue(){
 
   // query when there is a connection
   if (!$conn) {
-    message("Error connecting to the CMS database.",'log','NOTICE');
+    echo "Error connecting to the CMS database." . "\n";
   
   } else {
     // To be sure, set the processing of items to off.
-    message("Setting all items to processing=0",'log','DEBUG'); 
     $q = mysql_query("UPDATE columby_queue SET processing=0 WHERE processing=1", $conn);
 
     // check to see if there is (more than) 1 item in the queue for processing
     $q = mysql_query("SELECT COUNT(ID) FROM columby_queue WHERE done=0 AND processing=0", $conn);
     $count = mysql_result($q, 0);
 
-    if ($count == 1) {
-      message("There is $count job waiting for processing.",'log','DEBUG'); 
+    echo date('c') . " - Job count: " . $count . "\n";
+    if ($count > 0) { 
       return TRUE;
-    } elseif ($count > 1) {
-      message("There are $count job-items waiting for processing.",'log','DEBUG'); 
-      return TRUE;
-    } else {
-      message("There are no items to be processed. ",'log','DEBUG'); 
     }
   }
   // error in connection, or no items to process
@@ -294,15 +287,6 @@ function message($message, $service='log', $severity='INFO'){
   }
 }
 
-function get_log(){
-  global $logger;
-  return $logger->get_log(); 
-}
-
-function get_errorlog(){
-  global $logger;
-  return $logger->get_errorlog();
-}
 
 /**
  * Save the worker log object to the database
@@ -315,35 +299,32 @@ function worker_log_save($uuid){
   global $job;
   global $logger;
 
-  message('Saving log for $uuid', 'log', 'DEBUG');
+  $logger->add("Saving log for: " . $uuid);
 
   // only save the log for the right uuid
   if ($job['uuid'] == $uuid) {
-    message('getting log object','log','DEBUG');
-    $l = $logger->get_log();
-    message('logcount: ' . count($l),'log','DEBUG');
-    //message(implode(',',$l),'log','DEBUG');
+
     // check if there are log items present
-    if (count($l) > 0) {
+    if (count($logger->log) > 0) {
       
       // connect to the database
       $conn = drupal_connect();
       // convert array to string
-      $log = implode("\n", $l);
+      $log = $logger->log;
+      $log = implode("\n", $log);
       // escape unwanted characters
       $log = mysql_real_escape_string($log);
       
       // send to database
       $sql = "INSERT INTO columby_worker_log (uuid, log) VALUES ('$uuid', '$log')";
-      message('Sending sql: ' . $sql,'log','DEBUG');
-
+      
       $result = mysql_query($sql,$conn) or die(mysql_error());
-      message("Log for $uuid sent to database. ",'log','DEBUG');
+      
     } else {
-      message("There are no items in the log, not sent to database. ",'log','DEBUG'); 
+      echo "There are no items in the log, not sent to database. "; 
     }
   } else {
-    message("$uuid is not the current log uuid. ",'log','DEBUG'); 
+    echo "$uuid is not the current log uuid. "; 
   }
 }
 
@@ -521,69 +502,9 @@ function drupal_connect(){
 }
 
 function drupal_close($conn){
-
 }
+
 function drupal_query($sql){
-
 }
-
-
-
-// ***** TWITTER ***** //
-
-// Twitter API
-require 'lib/tmhOAuth/tmhOAuth.php';
-require 'lib/tmhOAuth/tmhUtilities.php';
-function sendTweet($msg) {
-  $tmhOAuth = new tmhOAuth(array(
-        'consumer_key' => $twitterSettings['consumer_key'], 
-        'consumer_secret' => $twitterSettings['consumer_secret'],
-        'user_token' => $twitterSettings['user_token'],
-        'user_secret' => $twitterSettings['user_secret'],
-    ));
-
-    $code = $tmhOAuth->request('POST', $tmhOAuth->url('1.1/statuses/update'), array(
-        'status' => $msg
-    ));
-    if ($code == 200) {
-    tmhUtilities::pr(json_decode($tmhOAuth->response['response']));
-  } else {
-      tmhUtilities::pr($tmhOAuth->response['response']);
-  }
-}
-
-
-
-
-/*****
-
-run()
-  while checkqueue()>>
-    render()>>
-  sleep(60)
-
-check_queue()
-  drupal_connect()
-    return FALSE or $conn
-  count queue items
-  return TRUE or FALSE
-
-process_job() 
-  create queue >> class queue()
-  drop existing table
-  determine job-type
-  create job-type (class): arcgis or csv >> class csv()
-  process metadata
-    delete existing metadata
-    add metadata
-
-class queue() 
-  Get first item from render_queue and return this array
-
-CSV()
-  Create the tablename from the render-queue array uuid
-
-
-*****/
 
 ?>

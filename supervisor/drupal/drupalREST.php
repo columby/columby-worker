@@ -36,7 +36,6 @@ class DrupalREST {
     curl_close($ch);
     $this->csrf_token = (array_key_exists('token', $response)) ? $response['token'] : false;
     
-    message("CSRF toke received: " . $this->csrf_token,'log','NOTICE');
     return $this->csrf_token;
   }
 
@@ -91,11 +90,9 @@ class DrupalREST {
     $response = json_decode(curl_exec($ch),true);
     if ($response['session_name'] && $response['sessid']){
       $this->session = $response['session_name'] . '=' . $response['sessid'];
-      message('session: ' . $this->session,'log','NOTICE');
     }
     if ($response['user']){
       $this->user = $response['user'];
-      //message('user: ' . print_r($this->user),'log','NOTICE');
     }
     // get new token
     $token = $this->request_token();
@@ -144,15 +141,6 @@ class DrupalREST {
     ));
 
     $result = json_decode(curl_exec($ch),true);
-    message('drupalrest update: ','log','NOTICE');
-    message(print_r($result, true),'log','NOTICE');
-
-    return $result; 
-
-    $this->_handleResponse($ch);
-
-    curl_close($ch);
-    message($result,'log','NOTICE'); 
 
     return $result;
   }

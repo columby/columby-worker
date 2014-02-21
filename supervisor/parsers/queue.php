@@ -6,6 +6,9 @@ class Job {
   public $conn; 
 
   function __construct(){
+    
+    global $logger; 
+
     // connect to the drupal CMS database
     $this->conn = drupal_connect(); 
     // Select all data from the oldest queue row which is undone and not processing
@@ -24,7 +27,7 @@ class Job {
     if ($this->conn) {
       $result = mysql_query($sql, $this->conn) or die (mysql_error());  
       $this->job_data = mysql_fetch_assoc($result);
-      message("Fetched job data: ID: ".$this->job_data['ID'] . ", uuid: ".$this->job_data['uuid'].", nid: ".$this->job_data['nid'].", type: ".$this->job_data['type'].".",'log','DEBUG');
+      $logger->add("Fetched job data: ID: ".$this->job_data['ID'] . ", uuid: ".$this->job_data['uuid'].", nid: ".$this->job_data['nid'].", type: ".$this->job_data['type'].".",'log','DEBUG');
     }
   }
 
