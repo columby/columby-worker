@@ -646,7 +646,7 @@ class scraper {
         "outSR"           => "4326", 
         "objectIds"       => "$ids"
       );
-    } else if($this->stats->currentVersion=="10.11"){
+    } else {
       $params = array(
         "f"               => "pjson",
         "where"           => "1=1",
@@ -660,8 +660,6 @@ class scraper {
         "outSR"           => "4326", 
         "objectIds"       => "$ids"
       );
-    } else {
-      return FALSE;
     }
 
     $result = $this->get($params,"/query");
