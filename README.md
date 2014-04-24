@@ -39,3 +39,6 @@ Add a settings file to the config folder
 Start the service
     
     service supervisor start
+
+
+We use Monit to monitor server processes, including the main supervisor process and the columby_worker process. 

@@ -1,0 +1,9 @@
+stack "php-5.4"
+runtime "php"
+
+exec "process_data.php"
+
+file "config.ini"
+dir "columby_api"
+dir "csv"
+dir "arcgis"
