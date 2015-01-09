@@ -3,8 +3,11 @@
 ## About
 The background workers for Columby (used for data-processing).
 
-## Installation 
-
-
 ## Overview
 
+
+## Installation 
+  
+    npm install
+    node server
+    
