@@ -3,4 +3,8 @@
 /.idea/
 /archive/
 /node_modules/
+<<<<<<< HEAD
 /settings.json
+=======
+.DS_Store
+>>>>>>> gitignore
