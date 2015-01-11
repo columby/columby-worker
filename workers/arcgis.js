@@ -20,7 +20,7 @@ exports.go = function(job,data,done){
 	self.ids;					// all dataset ids
 	// self.job.data.chunk; 	// current chunk as processed
 	self.objectidpresent = true;
-	
+
 	// settings
 	self.settings = settings;
 	self.tablename = "primary_"+data.primary.id;
@@ -28,13 +28,12 @@ exports.go = function(job,data,done){
 	// options
 	self.chunk_size = 100;		// chunk size scrape (rows per cycle)
 	// self.max_test_chunks = 9999;	// maximum of test cycles
-	
+
 
 	// RUN:
-
 	self.init = function(){
 
-		// get accessUrl from primary distribution 
+		// get accessUrl from primary distribution
 		for(var i = 0; i < self.columby_data.distributions.length; i++){
 			if(self.columby_data.distributions[i].id==self.columby_data.primary.distribution_id){
 				var url = self.columby_data.distributions[i].accessUrl;
@@ -72,7 +71,7 @@ exports.go = function(job,data,done){
 
 	this.get_ids = function(){
 		console.log("getting object ids...");
-		
+
 		var params = {"f" :"pjson",
 	  					"objectIds":"",
 	  					"where":"1=1",
@@ -113,7 +112,7 @@ exports.go = function(job,data,done){
 	}
 
 	this.get_records = function(){
-		
+
 		console.log("get and process rows chunk by chunk...");
 
 		// continue or start
@@ -125,9 +124,9 @@ exports.go = function(job,data,done){
 
 	this.get_records_recursive = function(chunki){
 		console.log("get chunk #"+chunki+"...");
-			
+
 		var ids = self.chunks[chunki];
-		
+
 		if(self.version=="10.04"){
 			var params = {
 						"f"			 	: "pjson",
@@ -138,10 +137,10 @@ exports.go = function(job,data,done){
 						"geometryType"  : "esriGeometryEnvelope",
 						"spatialRel"	: "esriSpatialRelIntersects",
 						"outFields"	 	: "*",
-						"outSR"		 	: "4326", 
+						"outSR"		 	: "4326",
 						"objectIds"	 	: ids};
 		}
-		
+
 		if(self.version=="10.11"){
 			var params = {
 						"f"			 	: "pjson",
@@ -152,7 +151,7 @@ exports.go = function(job,data,done){
 						"geometryType"  : "esriGeometryEnvelope",
 						"spatialRel"	: "esriSpatialRelIntersects",
 						"outFields"	 	: "*",
-						"outSR"		 	: "4326", 
+						"outSR"		 	: "4326",
 						"objectIds"	 	: ids}
 		}
 
@@ -175,10 +174,10 @@ exports.go = function(job,data,done){
 		// where tablename = primary_ID
 
 		if(data.features.length<1){
-			done(); 
+			done();
 			return true;
 		}
-		
+
 		self.columns = self.define_columns(data);
 
 		// create table if not exists
@@ -190,11 +189,11 @@ exports.go = function(job,data,done){
 
 		// insert data ------------------------------------------------------------------------------------------
 
-		// array for all value rows. 
+		// array for all value rows.
 		var valueLines = [];
 
 		for(i=0;i<data.features.length;i++){
-			
+
 			var row = data.features[i];
 
 			var values = [];
@@ -250,9 +249,9 @@ exports.go = function(job,data,done){
 		client.query(query,function(err, result) {
 			client.end();
 			if(err) {
-				// console.log("+++ INSERT ERROR +++ "); 
-				// console.log(query.substring(0,5000)); 
-				console.log("features length",data.features.length); 
+				// console.log("+++ INSERT ERROR +++ ");
+				// console.log(query.substring(0,5000));
+				console.log("features length",data.features.length);
 				done(err);
 			} else {
 				console.log("inserted "+current_ids.length+" rows");
@@ -270,23 +269,24 @@ exports.go = function(job,data,done){
 	this.connect_pg = function(database){
 		if(database=="metadata") var db = self.settings.pg.metadata;
 		if(database=="storage") var db = self.settings.pg.storage;
-		var conString = "postgres://"+
-				self.settings.pg.username+":"+
-				self.settings.pg.password+"@"+
-				self.settings.pg.host+":"+
-				self.settings.pg.port+"/"+
+
+		var conString = process.env.DB_GEO_URI || "postgres://" +
+				self.settings.pg.username+":" +
+				self.settings.pg.password+"@" +
+				self.settings.pg.host+":" +
+				self.settings.pg.port+"/" +
 				db;
 
 		var client = new pg.Client(conString);
 		client.connect(function(err){
-			if(err){ 
+			if(err){
 				self.done(err);
 				// self.done("error connecting to "+database+" database");
 			}
 		});
 
 		return client;
-	}
+	};
 
 	// functionality functions (great fun)
 
@@ -306,7 +306,7 @@ exports.go = function(job,data,done){
 								"esriFieldTypeGlobalID" 	: "TEXT",
 								"esriFieldTypeXML"	  		: "TEXT",
 								"Latitude"	  				: "TEXT"};
-		
+
 		// process each field to get columns
 		var columnNames = [];
 		var columnTypes = [];
@@ -344,7 +344,7 @@ exports.go = function(job,data,done){
 
 		var sqlcolumns = [];
 		// Sanitize the column values;
-		columnNames = self.sanitize_columns(columnNames); 
+		columnNames = self.sanitize_columns(columnNames);
 		self.columnNames = columnNames;
 		columnNames.forEach(function(v,k){
 			sqlcolumns.push(v+" "+columnTypes[k]);
@@ -354,7 +354,7 @@ exports.go = function(job,data,done){
 	}
 
 	this.sanitize_columns = function(columns){
-		
+
 		var fields = [];
 		columns.forEach(function(field){
 			field = field.replace(' ', '_');
@@ -369,7 +369,7 @@ exports.go = function(job,data,done){
 
 	return this;
 
-}
+};
 
 
 // -------------------------- TEST -------------------------- //

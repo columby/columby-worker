@@ -1,13 +1,15 @@
 /* here we go */
 
-var kue = require('kue');
+var kue = require('kue'),
+	request = require('request');
+var arcgis = require('./workers/arcgis.js');
 var jobs = kue.createQueue();
-var request = require('request');
-var arcgis = require('./arcgis.js');
+
+
 
 jobs.process("geoservice",function(job,done){
 	geoservice(job,done)
-})
+});
 
 
 function geoservice(job,done){
