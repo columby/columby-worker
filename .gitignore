@@ -1,7 +1,6 @@
-/supervisor/config/settings.php
-/worker-io/workers/process_data/config.ini
-/.idea/
-/archive/
-/node_modules/
-/settings.json
+.idea/
+archive/
+node_modules/
+/tmp/
 .DS_Store
+config/settings.json

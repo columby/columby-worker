@@ -1,12 +1,15 @@
+'use strict';
 // example: http://www.denhaag.nl/ArcGIS/rest/services/Open_services/Kunstobjecten/MapServer/0
 
-var request = require('request');
-var settings = require("../settings.json");
-var pg = require("pg");
-var escape = require("pg-escape");
+var request = require('request'),
+    pg = require('pg'),
+    escape = require('pg-escape');
+
+var settings = require('../config/settings.json');
 
 exports.go = function(job,data,done){
 
+  job.log('Starting job');
 	var self = this;
 
 	// some basic vars
@@ -23,7 +26,7 @@ exports.go = function(job,data,done){
 
 	// settings
 	self.settings = settings;
-	self.tablename = "primary_"+data.primary.id;
+	self.tablename = 'primary_' + data.primary.id;
 
 	// options
 	self.chunk_size = 100;		// chunk size scrape (rows per cycle)
@@ -47,17 +50,17 @@ exports.go = function(job,data,done){
 				self.url = url;
 			}
 		}
-		if(!url) self.end("no accessUrl found");
+		if(!url) self.end('No accessUrl found');
 
 		self.start();
 		// run
 		self.get_stats();
-	}
+	};
 
 	this.start = function(){
 		// general
-		console.log("\033[33mstart job: "+self.job.data.title+"\033[0m");
-		console.log("\033[35maccessUrl: "+self.url+"\033[0m");
+		console.log("Start job: "+self.job.data.title);
+		console.log("AccessUrl: "+self.url);
 
 		// drop table of exists
 		if(!self.job.data.chunk){
@@ -71,13 +74,11 @@ exports.go = function(job,data,done){
 		client.query("UPDATE \"Primaries\" SET status='processing' WHERE id="+self.columby_data.primary.id+";",function(err,result){
 			// error query
 			if(err){
-				console.log("\033[31merror:");
 				console.log(err);
-				console.log("\033[0m");
 			}
 			client.end();
 		})
-	}
+	};
 
 	this.end = function(message){
 
@@ -86,14 +87,10 @@ exports.go = function(job,data,done){
 			client.query("UPDATE \"Primaries\" SET status='error',StatusMsg='"+String(message).replace(/'/g, "''")+"'' WHERE id="+self.columby_data.primary.id+";",function(err,result){
 				// error query
 				if(err){
-					console.log("\033[31merror:");
 					console.log(err);
-					console.log("\033[0m");
 				}
 				client.end();
-				console.log("\033[31merror:");
 				console.log(message);
-				console.log("\033[0m");
 				self.done(message);
 			})
 			done(message);
@@ -103,16 +100,14 @@ exports.go = function(job,data,done){
 			client.query("UPDATE \"Primaries\" SET status='done',\"syncDate\"='"+now+"' WHERE id="+self.columby_data.primary.id+";",function(err,result){
 				// error query
 				if(err){
-					console.log("\033[31merror:");
 					console.log(err);
-					console.log("\033[0m");
 				}
 				client.end();
-				console.log("\033[32mjob done!\033[0m")
+				console.log('job done!');
 				self.done();
 			})
 		}
-	}
+	};
 
 	// running functions (in order of appearence)
 
@@ -129,7 +124,7 @@ exports.go = function(job,data,done){
 				self.get_ids();
 			}
 		});
-	}
+	};
 
 	this.get_ids = function(){
 		console.log("getting object ids...");
@@ -156,7 +151,7 @@ exports.go = function(job,data,done){
 				self.get_records();
 			}
 		});
-	}
+	};
 
 	this.get_total = function(){
 		var params = {"f":"pjson",
@@ -171,7 +166,7 @@ exports.go = function(job,data,done){
 			if(error) self.end("error getting total");
 			else self.total = data.count;
 		});
-	}
+	};
 
 	this.get_records = function(){
 
@@ -182,7 +177,7 @@ exports.go = function(job,data,done){
 		var start = self.job.data.chunk ? self.job.data.chunk : 0;
 
 		var result = self.get_records_recursive(start);
-	}
+	};
 
 	this.get_records_recursive = function(chunki){
 		console.log("get chunk #"+chunki+"...");
@@ -229,7 +224,7 @@ exports.go = function(job,data,done){
 				self.put_in_storage(data,ids,chunki);
 			}
 		});
-	}
+	};
 
 	this.put_in_storage = function(data,current_ids,chunki){
 		// WRITE DATA TO DB HERE
@@ -254,7 +249,7 @@ exports.go = function(job,data,done){
 		// array for all value rows.
 		var valueLines = [];
 
-		for(i=0;i<data.features.length;i++){
+		for(var i=0; i<data.features.length; i++){
 
 			var row = data.features[i];
 
@@ -323,7 +318,7 @@ exports.go = function(job,data,done){
 				self.get_records_recursive(chunki+1);
 			}
 		});
-	}
+	};
 
 	// postgres functions
 
@@ -347,7 +342,7 @@ exports.go = function(job,data,done){
 		});
 
 		return client;
-	}
+	};
 
 	// functionality functions (great fun)
 
@@ -404,10 +399,10 @@ exports.go = function(job,data,done){
 		self.columnNames = columnNames;
 		columnNames.forEach(function(v,k){
 			sqlcolumns.push(v+" "+columnTypes[k]);
-		})
-		columnstring = sqlcolumns.join(",");
-		return columnstring;
-	}
+		});
+
+		return sqlcolumns.join(",");
+	};
 
 	this.sanitize_columns = function(columns){
 
@@ -419,7 +414,7 @@ exports.go = function(job,data,done){
 			fields.push(field);
 		});
 		return fields;
-	}
+	};
 
 	this.init();
 
