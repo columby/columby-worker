@@ -1,7 +1,7 @@
 // example: http://www.denhaag.nl/ArcGIS/rest/services/Open_services/Kunstobjecten/MapServer/0
 
 var request = require('request');
-var settings = require("./settings.json");
+var settings = require("../settings.json");
 var pg = require("pg");
 var escape = require("pg-escape");
 
@@ -40,17 +40,72 @@ exports.go = function(job,data,done){
 				self.url = url;
 			}
 		}
-		if(!url) self.done("no accessUrl found");
+		if(!url) self.end("no accessUrl found");
 
+		self.start();
 		// run
 		self.get_stats();
-
-		// self.get_stats();
-		// self.get_ids();
-		// self.get_records();
-
 	}
 
+	this.start = function(){
+		// general
+		console.log("\033[33mstart job: "+self.job.data.title+"\033[0m");
+		console.log("\033[35maccessUrl: "+self.url+"\033[0m");
+
+		// drop table of exists
+		if(!self.job.data.chunk){
+			var client = self.connect_pg("storage");
+			client.query("DROP TABLE IF EXISTS "+self.tablename+";",function(err, result) {
+				if(err) end("error create table if not exist");
+			});
+		}
+
+		var client = self.connect_pg("metadata");
+		client.query("UPDATE \"Primaries\" SET status='processing' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+			// error query
+			if(err){
+				console.log("\033[31merror:");
+				console.log(err);
+				console.log("\033[0m");
+			}
+			client.end();
+		})
+	}
+
+	this.end = function(message){
+
+		if(message){
+			var client = self.connect_pg("metadata");
+			client.query("UPDATE \"Primaries\" SET status='error',StatusMsg='"+String(message).replace(/'/g, "''")+"'' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+				// error query
+				if(err){
+					console.log("\033[31merror:");
+					console.log(err);
+					console.log("\033[0m");
+				}
+				client.end();
+				console.log("\033[31merror:");
+				console.log(message);
+				console.log("\033[0m");
+				self.done(message);
+			})
+			done(message);
+		} else {
+			var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+			var client = self.connect_pg("metadata");
+			client.query("UPDATE \"Primaries\" SET status='done',\"syncDate\"='"+now+"' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+				// error query
+				if(err){
+					console.log("\033[31merror:");
+					console.log(err);
+					console.log("\033[0m");
+				}
+				client.end();
+				console.log("\033[32mjob done!\033[0m")
+				self.done();
+			})
+		}
+	}
 
 	// running functions (in order of appearence)
 
@@ -59,7 +114,7 @@ exports.go = function(job,data,done){
 
 		var params = {"f":"json","pretty":"true"};
 		request.get({url:this.url,qs:params,json:true},function(error,response,data){
-			if(error) self.done("error getting stats");
+			if(error) self.end("error getting stats");
 			else {
 				self.stats = data;
 				self.version = data.currentVersion;
@@ -80,7 +135,7 @@ exports.go = function(job,data,done){
 	  					"returnGeometry":"false"};
 
 	  	request.get({url:this.url+"/query",qs:params,json:true},function(error,response,data){
-			if(error) self.done("error getting stats");
+			if(error) self.end("error getting stats");
 			else {
 				self.ids = data.objectIds;
 				console.log("split ids in chunks of "+self.chunk_size);
@@ -106,7 +161,7 @@ exports.go = function(job,data,done){
 						"returnGeometry":"false"};
 
 		request.get({url:this.url+"/query",qs:params,json:true},function(error,response,data){
-			if(error) self.done("error getting total");
+			if(error) self.end("error getting total");
 			else self.total = data.count;
 		});
 	}
@@ -162,7 +217,7 @@ exports.go = function(job,data,done){
 		// console.log(get_url);
 
 		request.get({url:get_url,qs:{},json:true},function(error,response,data){
-			if(error) self.done("error getting total");
+			if(error) self.end("error getting total");
 			else {
 				self.put_in_storage(data,ids,chunki);
 			}
@@ -174,7 +229,7 @@ exports.go = function(job,data,done){
 		// where tablename = primary_ID
 
 		if(data.features.length<1){
-			done();
+			self.end();
 			return true;
 		}
 
@@ -184,7 +239,7 @@ exports.go = function(job,data,done){
 		var client = self.connect_pg("storage");
 		client.query("CREATE TABLE IF NOT EXISTS "+self.tablename+" (cid serial PRIMARY KEY, "+self.columns+");",function(err, result) {
 			client.end();
-			if(err) done("error create table if not exist");
+			if(err) end("error create table if not exist");
 		});
 
 		// insert data ------------------------------------------------------------------------------------------
@@ -216,16 +271,16 @@ exports.go = function(job,data,done){
 
 			// get geodata
 			if(row.geometry.x && row.geometry.y){
-				// values.push("ST_GeomFromText('POINT("+row.geometry.x+" "+row.geometry.y+")', 4326)");
-				values.push("null");
+				values.push("ST_GeomFromText('POINT("+row.geometry.x+" "+row.geometry.y+")', 4326)");
+				// values.push("null");
 			} else if(row.geometry.rings){
 				var points = [];
 				row.geometry.rings[0].forEach(function(v,k){
 					points.push(v[0]+" "+v[1]);
 				})
 				var pointString = points.join(",");
-				// values.push("ST_GeomFromText('POLYGON(("+pointString+"))', 4326)");
-				values.push("null");
+				values.push("ST_GeomFromText('POLYGON(("+pointString+"))', 4326)");
+				// values.push("null");
 			} else {
 				values.push("null");
 			}
@@ -252,7 +307,7 @@ exports.go = function(job,data,done){
 				// console.log("+++ INSERT ERROR +++ ");
 				// console.log(query.substring(0,5000));
 				console.log("features length",data.features.length);
-				done(err);
+				self.end(err);
 			} else {
 				console.log("inserted "+current_ids.length+" rows");
 				// if(chunki<self.chunks.length && chunki<self.max_test_chunks){
@@ -261,7 +316,6 @@ exports.go = function(job,data,done){
 				self.get_records_recursive(chunki+1);
 			}
 		});
-
 	}
 
 	// postgres functions
@@ -280,13 +334,13 @@ exports.go = function(job,data,done){
 		var client = new pg.Client(conString);
 		client.connect(function(err){
 			if(err){
-				self.done(err);
-				// self.done("error connecting to "+database+" database");
+				console.log(err);
+				self.end(err);
 			}
 		});
 
 		return client;
-	};
+	}
 
 	// functionality functions (great fun)
 
@@ -331,12 +385,7 @@ exports.go = function(job,data,done){
 
 		// add geometry and dates
 		columnNames.push("the_geom");
-
-		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-		// columnTypes.push("geometry");
-		columnTypes.push("TEXT");
-		// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
+		columnTypes.push("geometry");
 		columnNames.push("createdAt");
 		columnTypes.push("timestamp");
 		columnNames.push("updatedAt");
@@ -373,7 +422,6 @@ exports.go = function(job,data,done){
 
 
 // -------------------------- TEST -------------------------- //
-
 
 var exampledata = { id: 158,
   shortid: 'MWLxdxJ29Pr',
@@ -506,7 +554,7 @@ var exampledata = { id: 158,
 	   updated_at: '2014-12-30T21:19:00.219Z',
 	   dataset_id: 158 } ] }
 
-var examplejobdata = {"type": "geoservice",
+var examplejobdata = {"type": "arcgis",
 						"data": {
 							"title": "Fetch data from http://188.166.31.214:8000/api/v2/dataset/ with ID MWLxdxJ29Pr",
 							"ID": "MWLxdxJ29Pr"

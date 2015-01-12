@@ -7,12 +7,12 @@ var jobs = kue.createQueue();
 
 
 
-jobs.process("geoservice",function(job,done){
-	geoservice(job,done)
+jobs.process("arcgis",function(job,done){
+	arcgis(job,done)
 });
 
 
-function geoservice(job,done){
+function arcgis(job,done){
 
 	var ID = job.data.ID;
 
@@ -26,6 +26,8 @@ function geoservice(job,done){
     });
 
 }
+
+console.log("\033[34mkue started... \033[0m");
 
 kue.app.set('title', 'Columby Worker // kue');
 kue.app.listen(3000);
