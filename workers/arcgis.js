@@ -33,6 +33,13 @@ exports.go = function(job,data,done){
 	// RUN:
 	self.init = function(){
 
+		//var idx = self.columby_data.primary.distribution_id.indexOf(self.columby_data.distributions);
+		//if (idx === -1){
+		//	self.done("no accessUrl found");
+		//} else {
+		//	self.url = self.columby_data.distributions[ idx].accessUrl;
+		//}
+
 		// get accessUrl from primary distribution
 		for(var i = 0; i < self.columby_data.distributions.length; i++){
 			if(self.columby_data.distributions[i].id==self.columby_data.primary.distribution_id){

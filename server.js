@@ -1,10 +1,14 @@
 /* here we go */
 
+// modules
 var kue = require('kue'),
-	request = require('request');
-var arcgis = require('./workers/arcgis.js');
-var jobs = kue.createQueue();
+	  request = require('request');
 
+// workers
+var arcgis = require('./workers/arcgis.js');
+
+// processors
+var jobs = kue.createQueue();
 
 
 jobs.process("arcgis",function(job,done){
@@ -30,4 +34,5 @@ function arcgis(job,done){
 console.log("\033[34mkue started... \033[0m");
 
 kue.app.set('title', 'Columby Worker // kue');
-kue.app.listen(3000);
+
+kue.app.listen(process.env.COLUMBY_WORKER_PORT || 7000);
