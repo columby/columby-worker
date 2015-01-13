@@ -3,4 +3,4 @@ archive/
 node_modules/
 /tmp/
 .DS_Store
-config/settings.json
+config/settings.js

@@ -8,12 +8,12 @@ var express = require('express'),
     cors = require('cors');
 
 var arcgisProcessor = require('./processors/arcgisProcessor');
+var fortesProcessor = require('./processors/fortesProcessor');
 
 var jobs = kue.createQueue();
 
-jobs.process('arcgis',function(job,done){
-  arcgisProcessor(job,done);
-});
+jobs.process('arcgis', function(job,done){ arcgisProcessor(job,done); });
+jobs.process('fortes', function(job,done){ fortesProcessor(job,done); });
 
 
 var app = express();
