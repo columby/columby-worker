@@ -29,7 +29,7 @@ module.exports = function(job,done){
         // start arcgis scraper
         arcgisWorker.go(job, data, done);
       } else {
-        // Todo: Update metadata from queued to error. Needs general pg_metadata connection?
+        // Todo: Update metadata from 'queued' to 'error'. Needs general pg_metadata connection?
 
         //
         done('Error getting dataset (id: '+ID+') info');

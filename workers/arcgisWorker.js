@@ -59,19 +59,21 @@ exports.go = function(job,data,done){
 
 	this.start = function(){
 		// general
-		console.log("Start job: "+self.job.data.title);
-		console.log("AccessUrl: "+self.url);
+		console.log('Start job: ' + self.job.data.title);
+		console.log('AccessUrl: ' + self.url);
 
 		// drop table of exists
 		if(!self.job.data.chunk){
-			var client = self.connect_pg("storage");
-			client.query("DROP TABLE IF EXISTS "+self.tablename+";",function(err, result) {
+			var client = self.connect_pg('storage');
+			client.query('DROP TABLE IF EXISTS ' + self.tablename + ';',function(err, result) {
 				if(err) end("error create table if not exist");
 			});
 		}
 
-		var client = self.connect_pg("metadata");
-		client.query("UPDATE \"Primaries\" SET status='processing' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+		// Update the CMS
+    var cmsClient = self.connect_pg('metadata');
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'processing\' WHERE id=' + self.columby_data.primary.id + ';';
+		cmsClient.query(sql, function(err,result){
 			// error query
 			if(err){
 				console.log(err);
@@ -82,9 +84,11 @@ exports.go = function(job,data,done){
 
 	this.end = function(message){
 
+    var cmsClient = self.connect_pg('metadata');
+
 		if(message){
-			var client = self.connect_pg("metadata");
-			client.query("UPDATE \"Primaries\" SET status='error',StatusMsg='"+String(message).replace(/'/g, "''")+"'' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+			var sql = 'UPDATE "Primaries" SET status=\'error\',"StatusMsg"=\'' + String(message).replace(/'/g, "''") + '\' WHERE id=' + self.columby_data.primary.id + ';';
+			cmsClient.query(sql, function(err,result){
 				// error query
 				if(err){
 					console.log(err);
@@ -92,12 +96,12 @@ exports.go = function(job,data,done){
 				client.end();
 				console.log(message);
 				self.done(message);
-			})
+			});
 			done(message);
 		} else {
 			var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-			var client = self.connect_pg("metadata");
-			client.query("UPDATE \"Primaries\" SET status='done',\"syncDate\"='"+now+"' WHERE id="+self.columby_data.primary.id+";",function(err,result){
+      var sql = 'UPDATE "Primaries" SET status=\'done\',"syncDate"=\'' + now + '\' WHERE id=' + self.columby_data.primary.id + ';';
+			cmsClient.query(sql, function(err,result){
 				// error query
 				if(err){
 					console.log(err);

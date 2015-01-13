@@ -10,6 +10,7 @@
   "license": "MIT",
   "dependencies": {
     "cors": "^2.5.2",
+    "express": "^4.10.7",
     "kue": "^0.8.11",
     "pg": "^4.1.1",
     "pg-escape": "0.0.3",
