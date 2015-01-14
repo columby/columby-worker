@@ -3,18 +3,24 @@
 var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
+  copyFrom = require('pg-copy-streams').from,
   settings = require('../config/settings');
 
 
 module.exports = function(job,data,done) {
 
+  /* ----- Connection to databases ----- */
   var cmsClient = new pg.Client(settings.db.cms.uri);
   var dataClient = new pg.Client(settings.db.geo.uri);
 
+
+  /* ----- Variables ----- */
   var tablename = 'primary_' + data.primary.id;
-  var processedColumns
+  var processedColumns;
   var processedData;
 
+
+  /* ----- FUNCTIONS ----- */
   // Connect with database
   function connect(cb){
     cmsClient.connect(function(err){
@@ -66,14 +72,6 @@ module.exports = function(job,data,done) {
 
   // Fetch data
   function fetchData(cb){
-
-    var options={
-      url: settings.fortes.host+'/opendata',
-      auth: {
-        user: settings.fortes.username,
-        pass: settings.fortes.password
-      }
-    };
 
     request.get(settings.fortes.url, {
       'auth': {
@@ -153,14 +151,44 @@ module.exports = function(job,data,done) {
     });
   }
 
+  /**
+   * Create a file from the table
+   */
+  function createFile(cb){
+
+    // copy table to local tmp file
+    var stream = dataClient.query(copyFrom('COPY ' + tablename + ' FROM STDIN'));
+    var fileStream = fs.createReadStream(tablename + '.csv');
+    fileStream.on('error', done);
+    fileStream.pipe(stream).on('finish', done).on('error', done);
+
+    // add to cms (primary)
+
+    // send to s3
+
+    // clean up
+
+  }
+
   // finish
   function finish(cb){
     console.log('All is done, closing connection. ');
-    cmsClient.end();
-    dataClient.end();
 
-    cb(true);
+    // update dataset
+    var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\',"syncDate"=\'' + now + '\' WHERE id=' + data.primary.id + ';';
+    cmsClient.query(sql, function(err,result){
+      if (err){
+        cb(null,err);
+      } else {
+        cmsClient.end();
+        dataClient.end();
+        cb(true);
+      }
+    });
+
   }
+
 
   /**
    *
