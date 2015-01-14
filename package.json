@@ -9,10 +9,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "basic-auth": "^1.0.0",
     "cors": "^2.5.2",
     "express": "^4.10.7",
+    "jwt-simple": "^0.2.0",
     "kue": "^0.8.11",
+    "moment": "^2.9.0",
     "pg": "^4.1.1",
     "pg-copy-streams": "^0.3.0",
     "pg-escape": "0.0.3",
