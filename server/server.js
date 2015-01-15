@@ -28,6 +28,8 @@ app.set('appPath', config.root + '/public');
 // JWT authentication for jobs
 app.post('/job/*', auth.validateToken);
 app.delete('/job/*', auth.validateToken);
+
+// Initiate the worker UI
 app.get('/app', auth.basic, function(req,res){
   res.sendFile(app.get('appPath') + '/index.html');
 });

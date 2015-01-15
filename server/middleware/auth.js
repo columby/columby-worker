@@ -6,8 +6,7 @@ var jwt = require('jwt-simple'),
 var config = require('../../config/settings');
 
 
-exports.basic = function(req,res,next){
-  console.log('checking basic');
+exports.basic = function(req,res,next) {
   var user = basicAuth(req);
 
   function unauthorized(res) {
@@ -27,11 +26,9 @@ exports.basic = function(req,res,next){
 };
 
 exports.validateToken = function(req,res,next){
-  console.log('checking token');
   if (req.headers.authorization){
 
     var token = req.headers.authorization.split(' ')[1];
-    console.log(token);
 
     var payload;
 
@@ -39,17 +36,14 @@ exports.validateToken = function(req,res,next){
       payload = jwt.decode(token, config.jwt.secret);
     }
     catch(err){
-      console.log('no token');
       return res.json({status:'error', message:'No valid token found.'});
     }
-    console.log('no token.');
-    console.log(payload);
+
     if (payload){
       next();
     }
 
   } else {
-    console.log('no authorization header');
     return res.json({status:'error', message:'No token found.'});
   }
 };
