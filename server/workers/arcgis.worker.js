@@ -5,12 +5,27 @@ var request = require('request'),
     pg = require('pg'),
     escape = require('pg-escape');
 
-var settings = require('../../config/settings.js');
+var settings = require('../../config/settings');
 
 exports.go = function(job,data,done){
 
+  var self = this;
+
   job.log('Starting job');
-	var self = this;
+
+  /* ----- Connection to databases ----- */
+  self.cmsClient = new pg.Client(settings.db.cms.uri);
+  self.dataClient = new pg.Client(settings.db.geo.uri);
+
+  self.cmsClient.connect(function(err){
+    if(err) done(err);
+  });
+  self.dataClient.connect(function(err) {
+    if (err) done(err);
+  });
+
+
+
 
 	// some basic vars
 	self.job = job; 			// kue job
@@ -52,61 +67,58 @@ exports.go = function(job,data,done){
 		}
 		if(!url) self.end('No accessUrl found');
 
-		self.start();
+		start();
 		// run
 		self.get_stats();
 	};
 
-	this.start = function(){
+	function start(){
 		// general
 		console.log('Start job: ' + self.job.data.title);
 		console.log('AccessUrl: ' + self.url);
 
 		// drop table of exists
 		if(!self.job.data.chunk){
-			var client = self.connect_pg('storage');
-			client.query('DROP TABLE IF EXISTS ' + self.tablename + ';',function(err, result) {
-				if(err) end("error create table if not exist");
+			self.cmsClient.query('DROP TABLE IF EXISTS ' + self.tablename + ';',function(err, result) {
+				if(err) self.end("error create table if not exist");
 			});
 		}
 
 		// Update the CMS
-    var cmsClient = self.connect_pg('metadata');
     var sql = 'UPDATE "Primaries" SET "jobStatus"=\'processing\' WHERE id=' + self.columby_data.primary.id + ';';
-		cmsClient.query(sql, function(err,result){
+		self.cmsClient.query(sql, function(err,result){
 			// error query
 			if(err){
 				console.log(err);
 			}
-			client.end();
 		})
 	};
 
 	this.end = function(message){
-
-    var cmsClient = self.connect_pg('metadata');
+    job.log('Finishing job');
 
 		if(message){
 			var sql = 'UPDATE "Primaries" SET status=\'error\',"StatusMsg"=\'' + String(message).replace(/'/g, "''") + '\' WHERE id=' + self.columby_data.primary.id + ';';
-			cmsClient.query(sql, function(err,result){
+			self.cmsClient.query(sql, function(err,result){
 				// error query
 				if(err){
 					console.log(err);
 				}
-				client.end();
+				self.cmsClient.end();
+        self.dataClient.end();
 				console.log(message);
 				self.done(message);
 			});
-			done(message);
+			//done(message);
 		} else {
 			var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
       var sql = 'UPDATE "Primaries" SET status=\'done\',"syncDate"=\'' + now + '\' WHERE id=' + self.columby_data.primary.id + ';';
-			cmsClient.query(sql, function(err,result){
+			self.cmsClient.query(sql, function(err,result){
 				// error query
-				if(err){
-					console.log(err);
-				}
-				client.end();
+				if(err) console.log(err);
+
+        self.cmsClient.end();
+        self.dataClient.end();
 				console.log('job done!');
 				self.done();
 			})
@@ -242,9 +254,7 @@ exports.go = function(job,data,done){
 		self.columns = self.define_columns(data);
 
 		// create table if not exists
-		var client = self.connect_pg("storage");
-		client.query("CREATE TABLE IF NOT EXISTS "+self.tablename+" (cid serial PRIMARY KEY, "+self.columns+");",function(err, result) {
-			client.end();
+		self.dataClient.query("CREATE TABLE IF NOT EXISTS "+self.tablename+" (cid serial PRIMARY KEY, "+self.columns+");",function(err, result) {
 			if(err) end("error create table if not exist");
 		});
 
@@ -273,7 +283,7 @@ exports.go = function(job,data,done){
 					// v = "'"+"nothing"+"'";
 				}
 				values[k] = v;
-			})
+			});
 
 			// get geodata
 			if(row.geometry.x && row.geometry.y){
@@ -305,10 +315,9 @@ exports.go = function(job,data,done){
 		}
 		valueLines = valueLines.join(", ");
 
-		var client = self.connect_pg("storage");
 		var query = "INSERT INTO "+self.tablename+" ("+self.columnNames+") VALUES "+valueLines+";";
-		client.query(query,function(err, result) {
-			client.end();
+		self.dataClient.query(query,function(err, result) {
+
 			if(err) {
 				// console.log("+++ INSERT ERROR +++ ");
 				// console.log(query.substring(0,5000));
@@ -324,29 +333,7 @@ exports.go = function(job,data,done){
 		});
 	};
 
-	// postgres functions
 
-	this.connect_pg = function(database){
-		if(database=="metadata") var db = self.settings.pg.metadata;
-		if(database=="storage") var db = self.settings.pg.storage;
-
-		var conString = process.env.DB_GEO_URI || "postgres://" +
-				self.settings.pg.username+":" +
-				self.settings.pg.password+"@" +
-				self.settings.pg.host+":" +
-				self.settings.pg.port+"/" +
-				db;
-
-		var client = new pg.Client(conString);
-		client.connect(function(err){
-			if(err){
-				console.log(err);
-				self.end(err);
-			}
-		});
-
-		return client;
-	};
 
 	// functionality functions (great fun)
 
@@ -566,8 +553,3 @@ var examplejobdata = {"type": "arcgis",
 							"ID": "MWLxdxJ29Pr"
 							}
 						}
-
-// exports.go(examplejobdata,exampledata,function(){});
-
-
-/**/
