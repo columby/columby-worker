@@ -24,7 +24,7 @@ var all = {
 
 };
 
-
+console.log(all);
 var a = require('./' + process.env.NODE_ENV + '.js');
 
 

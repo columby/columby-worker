@@ -1,10 +1,14 @@
 'use strict';
 
+
 module.exports = function(sequelize, DataTypes) {
 
 
+
   /**
+   *
    * Schema definition
+   *
    */
   var Job = sequelize.define('Job', {
 
@@ -12,18 +16,19 @@ module.exports = function(sequelize, DataTypes) {
       type: {
         type: DataTypes.STRING
       },
-      // data required for the job
+      // Extra data required for the job
       data: {
         type: DataTypes.TEXT
       },
       // Status of the job
+      // [active,processing,error,done]
       status: {
-        type: DataTypes.STRING
+        type: DataTypes.STRING,
+        defaultValue: 'active'
       },
       // Progress counter
       progress: {
-        type: DataTypes.INTEGER,
-        defaultValue: 0
+        type: DataTypes.INTEGER
       },
       // Error Message
       error: {
@@ -35,15 +40,18 @@ module.exports = function(sequelize, DataTypes) {
       },
       // Duration of the job in seconds.
       duration: {
-        type: DataTypes.INTEGER,
-        defaultValue: 0
+        type: DataTypes.INTEGER
       },
-
       log: {
         type: DataTypes.TEXT
+      },
+      dataset_id:{
+        type: DataTypes.INTEGER
       }
     }
   );
+
+  //Job.sync();
 
   return Job;
 };

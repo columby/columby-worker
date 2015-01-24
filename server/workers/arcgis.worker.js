@@ -5,7 +5,7 @@ var request = require('request'),
     pg = require('pg'),
     escape = require('pg-escape');
 
-var settings = require('../../config/settings');
+var settings = require('../config/environment');
 
 exports.go = function(job,data,done){
 

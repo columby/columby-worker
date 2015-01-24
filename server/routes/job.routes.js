@@ -15,12 +15,17 @@ module.exports = function(app) {
 
   // get specific job
   router.get('/job'        , auth.checkJWT, jobCtrl.canManage, jobCtrl.index);
+  router.get('/job/start'  , auth.checkJWT, jobCtrl.canManage, jobCtrl.start);
   router.get('/job/:id'    , auth.checkJWT, jobCtrl.canManage, jobCtrl.show);
-  router.get('/job/:id/log', auth.checkJWT, jobCtrl.canManage, jobCtrl.jobLog);
+  router.get('/job/:id/log', auth.checkJWT, jobCtrl.canManage, jobCtrl.start);
+
   router.post('/job'       , auth.checkJWT, jobCtrl.canManage, jobCtrl.create);
+
   router.put('/job/:id'    , auth.checkJWT, jobCtrl.canManage, jobCtrl.update);
+
   router.delete('/job/:id' , auth.checkJWT, jobCtrl.canManage, jobCtrl.destroy);
 
 
   app.use('/api', router);
+
 };

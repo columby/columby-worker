@@ -4,7 +4,7 @@ var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
   copyFrom = require('pg-copy-streams').from,
-  settings = require('../../config/settings');
+  settings = require('../config/environment');
 
 
 module.exports = function(job,data,done) {

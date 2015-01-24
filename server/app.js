@@ -15,7 +15,8 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'development';
  * Dependencies
  */
 var express = require('express'),
-  config = require('./config/environment/index');
+  config = require('./config/environment/index'),
+  Worker = require('./worker/worker');
 
 
 /**
@@ -35,11 +36,23 @@ var models = require('./models/index');
  */
 var routes = require('./routes/index')(app);
 
+
 /**
  * Start server
  */
 server.listen(config.port, config.ip, function () {
   console.log('Express server listening on %d, in %s mode', config.port, app.get('env'));
+
+  console.log('Connecting worker.');
+  var worker = new Worker({},function(err){
+    if (err) {
+      console.log('err', err);
+    } else {
+      console.log('Starting worker.');
+      worker.start();
+    }
+  });
+
 });
 
 // Expose app

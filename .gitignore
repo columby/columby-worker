@@ -6,6 +6,8 @@ node_modules/
 .DS_Store
 config/settings.js
 
+/server/tmp/
 /server/config/environment/development.js
 /server/config/environment/production.js
 /server/config/local.env.js
+/.tmp/

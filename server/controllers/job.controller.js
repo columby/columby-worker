@@ -2,23 +2,85 @@
 
 var models = require('../models/index');
 
+// Worker is busy
+var processing = false;
 
-// Authorization
+
+
+/** -------- AUTHORIZATION ---------------------------- **/
 exports.canManage =function(req,res,next){
+  // get user
+
+  // check permission
+
   next();
 };
 
 
+
+/** -------- QUEUE FUNCTIONS --------------------------- **/
+function startQueue(){
+  // check if processing
+  if (processing) {
+    return 'Queue is running.';
+  }
+
+  // Check for an active job to process
+  models.Job.findOne({
+      where: {
+        status: 'active'
+        //sort: 'created_at ASC'
+      }
+    }).then(function(job){
+      if (job){
+        console.log('starting job: ' + job.id);
+        startJob(job);
+      } else {
+        return 'No active job found.';
+      }
+    }).catch(function(err){
+      console.log(err);
+    });
+}
+
+function finish(job){
+
+}
+
+/** -------- HELPER FUNCTIONS -------------------------- **/
+
+function validType(type){
+  var types=['csv','arcgis','fortes'];
+  return (types.indexOf(type) !== -1);
+}
+
+function validStatus(status){
+  var statuslist = ['active','processing','error','done'];
+  return (statuslist.indexOf(status) !== -1);
+}
+
+
+
+/** -------- API FUNTIONS ---------------------------- **/
+
 /**
- *
- * Get a list of jobs
- *
+ * API home
  */
-exports.index = function(req, res) {
-  models.Job.find().success(function(jobs){
-    res.json(jobs);
-  }).error(function(err){
-    return handleError(res,err);
+exports.home = function(req,res){
+  return res.json({
+    api: 'Columby worker',
+    version: '1',
+    endpoints: {
+      api: {
+        'status [GET]': 'worker status',
+        'stats [GET]': 'worker stats',
+        'job [GET]': 'Get job listing',
+        'job [POST]': 'Create a new job.',
+        'job/:id [PUT]': 'Update a job.',
+        'job/:id [DELETE]': 'Delete a job.',
+        'job/:id/log [GET]': 'Get a job log.'
+      }
+    }
   });
 };
 
@@ -29,7 +91,20 @@ exports.index = function(req, res) {
  *
  */
 exports.stats = function(req,res){
-  return res.json('stats');
+  return res.json({
+    description: 'Stats of past 30 days',
+    stats: {
+      total: {
+        jobs: 0,
+        error: 0,
+        done: 0
+      },
+      current: {
+        Active: 0,
+        processing: 0
+      }
+    }
+  });
 };
 
 
@@ -39,7 +114,55 @@ exports.stats = function(req,res){
  *
  */
 exports.status = function(req,res){
-  return res.json('status');
+  return res.json({
+    status: 'ok',
+    inProgress: processing,
+    queueSize: 0
+  });
+};
+
+
+/**
+ *
+ * Start the job Queue
+ *
+ */
+exports.start = function(req,res){
+  var start = startQueue();
+
+  return res.json({result: start});
+};
+
+
+/**
+ *
+ * Get a list of jobs
+ *
+ */
+exports.index = function(req, res) {
+  var limit = req.query.limit || 100;
+  if (limit>100){ limit=100; }
+  var offset = req.query.offset || 0;
+  var filter = {};
+  if (req.query.status){
+    filter.status = req.query.status;
+  }
+  if (req.query.datasetId){
+    filter.dataset_id = req.query.datasetId;
+  }
+  if (req.query.type){
+    filter.type = req.query.type;
+  }
+
+  models.Job.find({
+    where: filter,
+    offset: offset,
+    limit: limit
+  }).then(function(jobs){
+    res.json(jobs);
+  }).catch(function(err){
+    return handleError(res,err);
+  });
 };
 
 
@@ -49,9 +172,9 @@ exports.status = function(req,res){
  *
  */
 exports.show = function(req, res) {
-  Job.findOne(req.params.id).success(function(jobs){
-    res.json(jobs);
-  }).error(function(err){
+  models.Job.findOne(req.params.id).then(function(job){
+    res.json({job: job});
+  }).catch(function(err){
     return handleError(res,err);
   });
 };
@@ -63,9 +186,24 @@ exports.show = function(req, res) {
  *
  */
 exports.create = function(req, res) {
-  Job.save(req.body.job).success(function(result){
+
+  if  (!req.body.jobType || !req.body.datasetId) {
+    return handleError(res,'Not a valid job object found. ');
+  }
+
+  if (!validType(req.body.jobType)){
+    return handleError(res, 'Not a valid job type');
+  }
+
+  // Get job parameters
+  var job = {
+    type: req.body.jobType,
+    dataset_id: req.body.datasetId
+  };
+
+  models.Job.create(job).then(function(result){
     res.json(result);
-  }).error(function(err){
+  }).catch(function(err){
     return handleError(res,err);
   });
 };
@@ -77,13 +215,18 @@ exports.create = function(req, res) {
  *
  */
 exports.update = function(req, res) {
-  Job.findOne(req.params.id).success(function(job){
-    jop.updateAttributes(req.body.job).success(function(result){
+  // check for valid status
+  if (req.body.status && !validStatus(req.body.status)) {
+    return handleError(res,'Not a valid status. ');
+  }
+
+  Job.findOne(req.params.id).then(function(job){
+    job.updateAttributes(req.body).then(function(result){
       return res.json(result);
-    }).error(function(err){
+    }).catch(function(err){
       return handleError(res,err);
     });
-  }).error(function(err){
+  }).catch(function(err){
     return handleError(res,err);
   })
 };
@@ -95,7 +238,15 @@ exports.update = function(req, res) {
  *
  */
 exports.destroy = function(req, res) {
-  return res.json('Delete');
+  models.Job.findOne(req.params.id).then(function(job){
+    job.destroy().then(function(destroyed){
+      return res.json(destroyed);
+    }).catch(function(err){
+      handleError(res,err);
+    });
+  }).catch(function(err){
+    handleError(res,err);
+  });
 };
 
 
@@ -105,7 +256,15 @@ exports.destroy = function(req, res) {
  *
  */
 exports.jobLog = function(req,res){
-  return res.json('joblog');
+  models.Job.findOne(req.params.id).then(function(job){
+    return res.json({
+      jobId: job.id,
+      status: job.status,
+      log:job.log
+    });
+  }).catch(function(err){
+    handleError(res,err);
+  });
 };
 
 

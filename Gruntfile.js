@@ -12,9 +12,13 @@ module.exports = function (grunt) {
   // Load grunt tasks automatically, when needed
   require('jit-grunt')(grunt, {
     express: 'grunt-express-server',
-    buildcontrol: 'grunt-build-control',
     useminPrepare: 'grunt-usemin',
-    cdnify: 'grunt-google-cdn'
+    ngtemplates: 'grunt-angular-templates',
+    cdnify: 'grunt-google-cdn',
+    protractor: 'grunt-protractor-runner',
+    injector: 'grunt-asset-injector',
+    buildcontrol: 'grunt-build-control',
+    replace: 'grunt-replace'
   });
 
   // Time how long tasks take. Can help when optimizing build times
@@ -29,13 +33,13 @@ module.exports = function (grunt) {
 
     yeoman: {
       // configurable paths
-      //client: require('./bower.json').appPath || 'client',
+      client: require('./bower.json').appPath || 'client',
       dist: 'dist'
     },
 
     express: {
       options: {
-        port: process.env.PORT || 8000
+        port: process.env.PORT || 7000
       },
       dev: {
         options: {
@@ -49,14 +53,53 @@ module.exports = function (grunt) {
         }
       }
     },
+
     open: {
       server: {
         url: 'http://localhost:<%= express.options.port %>'
       }
     },
+
     watch: {
+      injectJS: {
+        files: [
+          '<%= yeoman.client %>/app/**/*.js',
+          '!<%= yeoman.client %>/app/**/*.spec.js',
+          '!<%= yeoman.client %>/app/**/*.mock.js',
+          '!<%= yeoman.client %>/app/app.js'],
+        tasks: ['injector:scripts']
+      },
+      injectCss: {
+        files: [
+          '<%= yeoman.client %>/{app,components}/**/*.css'
+        ],
+        tasks: ['injector:css']
+      },
+      injectLess: {
+        files: [
+          '<%= yeoman.client %>/assets/styles/**/*.less'],
+        tasks: ['injector:less']
+      },
+      less: {
+        files: [
+          '<%= yeoman.client %>/assets/styles/**/*.less'],
+        tasks: ['less', 'autoprefixer']
+      },
       gruntfile: {
         files: ['Gruntfile.js']
+      },
+      livereload: {
+        files: [
+          '{.tmp,<%= yeoman.client %>}/{app,components}/**/*.css',
+          '{.tmp,<%= yeoman.client %>}/{app,components}/**/*.html',
+          '{.tmp,<%= yeoman.client %>}/{app,components}/**/*.js',
+          '!{.tmp,<%= yeoman.client %>}/{app,components}/**/*.spec.js',
+          '!{.tmp,<%= yeoman.client %>}/{app,components}/**/*.mock.js',
+          '<%= yeoman.client %>/assets/images/{,*//*}*.{png,jpg,jpeg,gif,webp,svg}'
+        ],
+        options: {
+          livereload: 1137
+        }
       },
       express: {
         files: [
@@ -64,7 +107,7 @@ module.exports = function (grunt) {
         ],
         tasks: ['express:dev', 'wait'],
         options: {
-          livereload: true,
+          livereload: 1337,
           nospawn: true //Without this option specified express won't be reloaded
         }
       }
@@ -111,7 +154,10 @@ module.exports = function (grunt) {
           dot: true,
           src: [
             '.tmp',
-            './client/*'
+            '<%= yeoman.dist %>/*',
+            '!<%= yeoman.dist %>/.git*',
+            '!<%= yeoman.dist %>/.openshift',
+            '!<%= yeoman.dist %>/Procfile'
           ]
         }]
       },
@@ -137,7 +183,8 @@ module.exports = function (grunt) {
     'node-inspector': {
       custom: {
         options: {
-          'web-host': 'localhost'
+          'web-host': 'localhost',
+          'debug-port': 5857
         }
       }
     },
@@ -218,6 +265,7 @@ module.exports = function (grunt) {
         }
       }
     },
+
     // The following *-min tasks produce minified files in the dist folder
     imagemin: {
       dist: {
@@ -255,6 +303,35 @@ module.exports = function (grunt) {
     },
 
 
+    // Package all the html partials into a single javascript payload
+    ngtemplates: {
+      options: {
+        // This should be the name of your apps angular module
+        module: 'columbyWorkerApp',
+        htmlmin: {
+          collapseBooleanAttributes: true,
+          collapseWhitespace: true,
+          removeAttributeQuotes: true,
+          removeEmptyAttributes: true,
+          removeRedundantAttributes: true,
+          removeScriptTypeAttributes: true,
+          removeStyleLinkTypeAttributes: true
+        },
+        usemin: 'app/app.js'
+      },
+      main: {
+        cwd: '<%= yeoman.client %>',
+        src: ['{app,views}/**/*.html'],
+        dest: '.tmp/templates.js'
+      },
+      tmp: {
+        cwd: '.tmp',
+        src: ['{app,views}/**/*.html'],
+        dest: '.tmp/tmp-templates.js'
+      }
+    },
+
+
     // Replace Google CDN references
     cdnify: {
       dist: {
@@ -266,23 +343,23 @@ module.exports = function (grunt) {
     copy: {
       dist: {
         files: [{
-          //  expand: true,
-          //  dot: true,
-          //  cwd: '<%= yeoman.client %>',
-          //  dest: '<%= yeoman.dist %>/public',
-          //  src: [
-          //    '*.{ico,png,txt}',
-          //    '.htaccess',
-          //    'bower_components/**/*',
-          //    'assets/images/{,*/}*.{webp}',
-          //    'assets/fonts/**/*',
-          //    'index.html'
-          //  ]
-          //},{
-          //  expand: true,
-          //  cwd: '.tmp/images',
-          //  dest: '<%= yeoman.dist %>/public/assets/images',
-          //  src: ['generated/*']
+            expand: true,
+            dot: true,
+            cwd: '<%= yeoman.client %>',
+            dest: '<%= yeoman.dist %>/public',
+            src: [
+              '*.{ico,png,txt}',
+              '.htaccess',
+              'bower_components/**/*',
+              'assets/images/{,*/}*.{webp}',
+              'assets/fonts/**/*',
+              'index.html'
+            ]
+          },{
+            expand: true,
+            cwd: '.tmp/images',
+            dest: '<%= yeoman.dist %>/public/assets/images',
+            src: ['generated/*']
         }, {
           expand: true,
           dest: '<%= yeoman.dist %>',
@@ -292,13 +369,13 @@ module.exports = function (grunt) {
           ]
         }]
       }
-      //,
-      //styles: {
-      //  expand: true,
-      //  cwd: '<%= yeoman.client %>',
-      //  dest: '.tmp/',
-      //  src: ['{app,components}/**/*.css']
-      //}
+      ,
+      styles: {
+        expand: true,
+        cwd: '<%= yeoman.client %>',
+        dest: '.tmp/',
+        src: ['{app,components}/**/*.css']
+      }
     },
 
     buildcontrol: {
@@ -332,10 +409,10 @@ module.exports = function (grunt) {
     // Run some tasks in parallel to speed up the build process
     concurrent: {
       server: [
-
+        'less'
       ],
       test: [
-
+        'less'
       ],
       debug: {
         tasks: [
@@ -347,7 +424,9 @@ module.exports = function (grunt) {
         }
       },
       dist: [
-
+        'less',
+        'imagemin',
+        'svgmin'
       ]
     },
 
@@ -372,8 +451,82 @@ module.exports = function (grunt) {
         NODE_ENV: 'production'
       },
       all: localConfig
-    }
+    },
 
+    // Compiles Less to CSS
+    less: {
+      options: {
+        paths: [
+          '<%= yeoman.client %>/bower_components',
+          '<%= yeoman.client %>/app'
+        ]
+      },
+      server: {
+        files: {
+          '.tmp/app/app.css': '<%= yeoman.client %>/assets/styles/app.less'
+        }
+      }
+    },
+
+    injector: {
+      options: {},
+      // Inject application script files into index.html (doesn't include bower)
+      scripts: {
+        options: {
+          transform: function (filePath) {
+            filePath = filePath.replace('/client/', '');
+            filePath = filePath.replace('/.tmp/', '');
+            return '<script src="' + filePath + '"></script>';
+          },
+          starttag: '<!-- injector:js -->',
+          endtag: '<!-- endinjector -->'
+        },
+        files: {
+          '<%= yeoman.client %>/index.html': [
+            ['{.tmp,<%= yeoman.client %>}/app/**/*.js',
+              '!{.tmp,<%= yeoman.client %>}/app/app.js',
+              '!{.tmp,<%= yeoman.client %>}/app/**/*.spec.js',
+              '!{.tmp,<%= yeoman.client %>}/app/**/*.mock.js']
+          ]
+        }
+      },
+
+      // Inject component less into app.less
+      less: {
+        options: {
+          transform: function (filePath) {
+            filePath = filePath.replace('/client/app/', '');
+            return '@import \'' + filePath + '\';';
+          },
+          starttag: '// injector',
+          endtag: '// endinjector'
+        },
+        files: {
+          '<%= yeoman.client %>/assets/styles/app.less': [
+            '<%= yeoman.client %>/assets/styles/**/*.less',
+            '!<%= yeoman.client %>/assets/styles/app.less'
+          ]
+        }
+      },
+
+      // Inject component css into index.html
+      css: {
+        options: {
+          transform: function (filePath) {
+            filePath = filePath.replace('/client/', '');
+            filePath = filePath.replace('/.tmp/', '');
+            return '<link rel="stylesheet" href="' + filePath + '">';
+          },
+          starttag: '<!-- injector:css -->',
+          endtag: '<!-- endinjector -->'
+        },
+        files: {
+          '<%= yeoman.client %>/index.html': [
+            '<%= yeoman.client %>/{app,components,styles}/**/*.css'
+          ]
+        }
+      }
+    }
   });
 
   // Used for delaying livereload until after server has restarted
@@ -431,17 +584,22 @@ module.exports = function (grunt) {
 
   grunt.registerTask('build', [
     'clean:dist',
+    'replace:dist',
+    'injector:less',
     'concurrent:dist',
-    //'useminPrepare',
+    'injector',
+    'wiredep',
+    'useminPrepare',
     'autoprefixer',
-    //'concat',
-    //'ngAnnotate',
+    'ngtemplates',
+    'concat',
+    'ngAnnotate',
     'copy:dist',
-    //'cdnify',
-    //'cssmin',
-    //'uglify',
-    'rev'
-    //'usemin'
+    'cdnify',
+    'cssmin',
+    'uglify',
+    'rev',
+    'usemin'
   ]);
 
   grunt.registerTask('default', [
@@ -473,38 +631,14 @@ module.exports = function (grunt) {
       ]);
     }
 
-    if (target === 'local') {
-      grunt.task.run([
-        'clean:server',
-        'env:all',
-        'concurrent:server',
-        'autoprefixer',
-        'express:dev',
-        'wait',
-        'open',
-        'watch'
-      ]);
-    }
-
-    if (target === 'staging') {
-      grunt.task.run([
-        'clean:server',
-        'env:all',
-        'concurrent:server',
-        'autoprefixer',
-        'express:dev',
-
-        'wait',
-        'open',
-        'watch'
-      ]);
-    }
-
     if (target === 'development') {
       grunt.task.run([
         'clean:server',
         'env:all',
+        'injector:less',
         'concurrent:server',
+        'injector',
+        'wiredep',
         'autoprefixer',
         'express:dev',
         'wait',
@@ -516,7 +650,10 @@ module.exports = function (grunt) {
     grunt.task.run([
       'clean:server',
       'env:all',
+      'injector:less',
       'concurrent:server',
+      'injector',
+      'wiredep',
       'autoprefixer',
       'express:dev',
       'wait',

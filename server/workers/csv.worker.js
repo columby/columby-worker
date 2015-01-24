@@ -6,246 +6,211 @@ var fs = require('fs'),
   request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
-  config = require('../../config/settings'),
+  config = require('../config/environment'),
   Baby = require('babyparse');
 
 
 
-module.exports = function(job,data,done) {
+var CsvWorker = module.exports = function(job, callback) {
+  var self=this;
 
-  /* ----- Variables ----- */
-  var dataConn = config.db.geo.uri;
-  var cmsConn = config.db.cms.uri;
-  var tablename = 'primary_' + data.primary.id;
-  var remoteFile;
-  var localFile;
-  var error = false;
+  self._tablename = null;
+  self._remoteFile = null;
+  self._localFile = null;
+  self._processingError = false;
 
   // csv processing variables
-  var rl;                       // Readline interface
-  var lineCounter     = 0;      // Counter for the number of processed lines
-  var parsingFinished = false;
-  var columns         = [];     //
-  var batch           = [];
-  var batchInProgress = false;
-  var batchSize       = 50;
-  var batchedPaused   = false;
-  var tableCreated    = false;
+  self._rl = null;                    // Readline interface
+  self._lineCounter = 0;              // Counter for the number of processed lines
+  self._parsingFinished = false;
+  self._columns = [];                 //
+  self._batch = [];
+  self._batchInProgress = false;
+  self._batchSize = 50;
+  self._batchedPaused = false;
+  self._tableCreated = false;
+
+};
 
 
-  // Check for valid primary id
-  if (!data.primary && !data.primary.id){
-    return handleError('No primary ID!');
-  }
+/**
+ *
+ * Create a new job and process it.
+ *
+ * @param job
+ * @param callback
+ */
+CsvWorker.prototype.start = function(job,callback){
 
+  var self=this;
+  self._job = job;
 
-  /* ----- FUNCTIONS ----- */
-  // Initiate
-    // Download the file from S3
-    // Delete table if exists
-  function initiate(cb){
-
-    // get file details from cms
-    pg.connect(cmsConn, function(err,client,cdone){
-      if (err){ return handleError(err); }
-      // primary join distribution.downloadUrl
-      var sql = 'SELECT "Files"."url" FROM "Distributions" LEFT JOIN "Files" ON "Distributions"."file_id"="Files"."id" WHERE "Distributions"."id"=' + data.primary.distribution_id + ';';
-      job.log('sql: '+ sql);
-      client.query(sql, function(err,result){
-        cdone();
-        if (err){
-          return handleError(err);
-        } else if(result.rowCount!==1){
-          return handleError('No file defined. ');
-        }
-
-        remoteFile = result.rows[0].url;
-        console.log('Remote file url: ', remoteFile);
-
-        // Validate if csv
-
-
-        pg.connect(dataConn, function (err, client, cdone) {
-          if (err){ return cb(err); }
-          client.query('DROP TABLE IF EXISTS ' + tablename + ';',function(err) {
-            cdone();
-            if (err) {
-              handleError(err);
-            }
-            job.log('Existing table dropped.');
-
-            // Return to main function;
-            cb();
-          });
-        });
-      })
-    });
-  }
-
-
-  /**
-   *
-   * Process
-   * - Create tables
-   * - Upload data
-   *
-   */
-  function process(cb){
-    console.log('Initiating processing. ');
-
-    // save remote file to local disk
-    localFile = config.root + '/server/tmp/' + data.primary.id;
-    var ws = fs.createWriteStream(localFile);
-
-    // request the file from a remote server
-    var rem = request(remoteFile);
-    rem
-      .on('data', function (chunk) {
-        ws.write(chunk);
-      })
-      .on('finish', function (err) {
-        return handleError(err);
-      })
-      .on('end', function () {
-        var instream = fs.createReadStream(localFile);
-        var outstream = new stream;
-        outstream.readable = true;
-        rl = readline.createInterface({
-          input: instream,
-          output: outstream
-        });
-
-        rl
-          .on('line', function (line) {
-            if (!error) {
-              // Parse the line
-              lineCounter++;
-              var parsedLine = Baby.parse(line);
-              if (parsedLine.errors.length > 0) {
-                //console.log(parsedLine);
-                job.log('There was an error processing.', parsedLine.errors);
-                return handleError(parsedLine.errors);
-              } else if (lineCounter === 1) {
-                console.log('Parsing first line');
-                columns = parsedLine.data[0];
-                createTable();
-              } else {
-                var l = parsedLine.data[ 0];
-                if (l.length !== columns.length){
-                  console.log('Field count ' + l.length + ' does not match column count ' + columns.length + '.');
-                  return handleError('Field count ' + l.length + ' does not match column count ' + columns.length + '.');
-                } else {
-                  // add the line to the batch
-                  // batch will start after creating the table;
-                  batch.push(parsedLine.data[0]);
-                }
-              }
-            }
-          })
-          .on('close', function () {
-            console.log('Closing readline');
-            // send final lines
-            parsingFinished = true;
-            processBatch();
-          });
-      });
-  }
-
-
-  // Complete
-  // Delete local file
-  // Create download file
-  function finish(cb){
-    console.log('Here is the finish!');
-  }
-
-
-  /**
-   *
-   * General error handler
-   *
-   */
-  function handleError(errorMsg){
-    error=true;
-
-    // Todo: Close stream if exist
-    rl.close();
-
-    job.log('--- ERROR ---');
-    job.log(String(errorMsg));
-    console.log('--- ERROR ---');
-    console.log(errorMsg[0].message + ' at row ' + errorMsg[0].row);
-    // Todo: send error message to cms
-    pg.connect(cmsConn, function(err,client,cdone){
-      var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\',"statusMsg"=\'' + errorMsg[0].message + ' at row ' + errorMsg[0].row + '\' WHERE id=' + data.primary.id + ';';
-      console.log('sql', sql);
-      client.query(sql, function(err,res){
-        console.log(err);
-        cdone();
-        console.log('CMS updated.');
-      });
-    });
-
-    done(errorMsg);
-  }
-
-
-  /**
-   *
-   * Main
-   *
-   */
-  function init(){
-    initiate(function(err) {
-      if(err){ return handleError(err);}
-      process(function(err) {
-        if(err){ return handleError(err);}
-        finish(function(err) {
-          if(err){ return handleError(err);}
-          done();
-        });
-      });
-    });
-  }
-
-
-  /**
-   *
-   * Initiate
-   *
-   */
-  init();
-
-
-  /**
-   *
-   * Validate and save columns to a new database table.
-   * @param columns
-   *
-   */
-  function createTable(){
-    if (!columns){
-      return handleError('There was an error parsing the columns. ');
+  connect(function(err) {
+    if (err) {
+      handleError('There as an error connecting to the DBs.');
+      return callback(err)
     }
-    var sc = sanitizeColumnNames();
-    // assume all text column types for now.
-    sc = sc.join(' text, ') + ' text';
-
-    var sql = 'CREATE TABLE IF NOT EXISTS ' + tablename + ' (cid serial PRIMARY KEY, ' + sc + ', "created_at" timestamp, "updated_at" timestamp);';
-    console.log('Creating table: ', sql);
-
-    pg.connect(dataConn, function(err, client, cdone){
-      client.query(sql, function(err){
-        cdone();
+    // validate job data
+    validateData(function(err) {
+      if (err) {
+        console.log('There as an error validating the data.',err);
+        handleError('There as an error validating the data.');
+        return callback(err)
+      }
+      // data processing
+      process(function (err) {
         if (err) {
-          return handleError(err);
+          console.log('There as an error processing the data.',err);
+          handleError('There as an error processing the data.');
+          return callback(err)
         }
-        job.log('Table created. ');
-        console.log('Table created.');
-        tableCreated=true;
-        // Start the processing
-        processBatch();
+        // finish
+        finish(function (err) {
+          if (err) {
+            console.log('There as an error finishing.',err);
+            handleError('There as an error finishing.');
+            return callback(err)
+          }
+          // complete
+          callback(err);
+        });
       });
+    });
+  });
+
+
+  /**
+   * Connect to CMS and GEO db
+   *
+   * @param callback
+   */
+  function connect(callback) {
+    self._connection = {};
+    // Connect to cms
+    pg.connect(config.db.cms.uri, function (err, client, done) {
+      if (err) { return callback(err); }
+      console.log('Connected to CMS DB');
+      self._connection.cms = {
+        client: client,
+        done: done
+      };
+      // Connect to postgis
+      pg.connect(config.db.postgis.uri, function (err, client, done) {
+        if (err) { return callback(err); }
+        console.log('Connected to Data DB.');
+        self._connection.data = {
+          client: client,
+          done: done
+        };
+        callback();
+      });
+    });
+  }
+
+  /**
+   *
+   * Validate if required elements in job are present.
+   *
+   * @param callback
+   * @returns {*}
+   */
+  function validateData(callback){
+
+    if (!self._job.data.primaryId) {
+      return callback('No primary ID!');
+    }
+
+    self._tablename = 'primary_' + self._job.id;
+
+    callback();
+  }
+
+
+  /**
+   *
+   * Drop existing table and download file
+   *
+   */
+  function process(callback){
+
+    // drop existing database
+    var sql = 'DROP TABLE IF EXISTS "' + self._tablename + '";';
+    console.log('Dropping table: ', sql);
+    self._connection.data.client.query(sql,function(err,result) {
+      if (err) {
+        console.log('err', err);
+        callback(err);
+      }
+      console.log('Downloading file to local disk');
+      self._localFile = config.root + '/server/tmp/' + self._job.data.primaryId;
+      var ws = fs.createWriteStream(self._localFile);
+      // request the file from a remote server
+      var rem = request(self._job.data.fileUrl);
+      rem.on('data', function (chunk) {
+        ws.write(chunk);
+      }).on('finish', function (err) {
+        console.log('Finish error ', err);
+        return callback(err);
+      }).on('end', function(){
+        processData(callback)
+      })
+
+    });
+  }
+
+
+  /**
+   *
+   * Process a local file to csv lines.
+   *
+   **/
+  function processData(callback){
+    var instream = fs.createReadStream(self._localFile);
+    var outstream = new stream;
+    outstream.readable = true;
+    self._rl = readline.createInterface({
+      input: instream,
+      output: outstream
+    });
+
+    self._rl.on('line', function (line) {
+      // Stop processing if there was already a processing error
+      if (!self._processingError) {
+        // Parse the line
+        self._lineCounter++;
+        var parsedLine = Baby.parse(line);
+        if (parsedLine.errors.length > 0) {
+          // handle error and stop processing
+          console.log('There was an error processing.', parsedLine.errors);
+          //self._processingError = true;
+          return callback(parsedLine.errors);
+        } else if (self._lineCounter === 1) {
+          console.log('Parsing first line');
+          self._columns = parsedLine.data[0];
+          // create table
+          self.createTable(function(err){
+            checkBatch(callback);
+          });
+        } else {
+          // process single line
+          var l = parsedLine.data[0];
+          if (l.length !== self._columns.length) {
+            console.log('Field count ' + l.length + ' does not match column count ' + self._columns.length + '.');
+            //return callback('Field count ' + l.length + ' does not match column count ' + self._columns.length + '.');
+          } else {
+            // add the line to the batch
+            // batch will start after creating the table;
+            self._batch.push(parsedLine.data[0]);
+            // Try processing the batch
+            checkBatch(callback);
+          }
+        }
+      }
+    }).on('close', function () {
+      console.log('Closing readline');
+      // send final lines
+      self._parsingFinished = true;
+      checkBatch(callback);
     });
   }
 
@@ -255,76 +220,172 @@ module.exports = function(job,data,done) {
    * Save a batch of rows to the database.
    *
    */
-  function processBatch() {
+  function checkBatch(callback) {
 
-    if ( (error !== true) && (tableCreated === true) && (batchInProgress===false) ){
-      console.log('Processing batch, ' + batch.length + ' in queue.');
-      batchInProgress = true;
+    // Batch not empty, not processing
+    if ((self._batch.length>0 ) &&  (!self._batchInProgress)) {
+      console.log('Batch not empty, not processing, let\'s go!');
+      processBatch(function(err){
+        if (err){ callback(err);}
+      });
+    }
 
-      while (batch.length>0){
-        var workBatch = batch.splice(0,batchSize);
-        console.log('Workbatch length: ' + workBatch.length);
-        console.log('Remaining batch length: ' + batch.length);
-        sendRows(workBatch);
-      }
-
-      batchInProgress=false;
-      console.log('Done batching. ');
-
-      if (parsingFinished===true){
-        console.log('Parsing also finished. Going to the finisher. ');
-        finish();
-      }
+    // Batch empty, done processing
+    if ( (self._batch.length===0 ) && self._parsingFinished & !self._batchInProgress) {
+      console.log('Batch empty, done processing');
+      finish();
     }
   }
 
 
-  // create statement;
-  // insert in db;
-  function sendRows(rows){
-    pg.connect(dataConn,function(err,client,cdone){
-      if (err) { return handleError(err); }
-
-      var buildStatement = function(rows) {
-        var params = [];
-        var chunks = [];
-        for(var i = 0; i < rows.length; i++) {
-          var row = rows[ i];
-          var valuesClause = [];
-          for (var k=0;k<columns.length;k++) {
-            params.push(row[ k]);
-            valuesClause.push('$' + params.length);
-          }
-          chunks.push('(' + valuesClause.join(', ') + ')')
-        }
-        return {
-          text: 'INSERT INTO ' + tablename + ' (' + columns.join(',') + ') VALUES ' + chunks.join(', '),
-          values: params
-        }
-      };
-
-      console.log('Inserting ' + rows.length + ' rows.');
-
-      // Execute the query
-      client.query(buildStatement(rows), function(err){
-        cdone();
-        if (err){ return handleError(err); }
-        console.log('Workbarch inserted. ' + batch.count + ' items in queue. ');
+  /**
+   *
+   * Process a part of the batch.
+   *
+   * @param callback
+   */
+  function processBatch(callback){
+    console.log('processing batch ' + self._batch.length);
+    if (self._batch.length>0){
+      self._batchInProgress = true;
+      var workBatch = self._batch.splice(0, self._batchSize);
+      console.log('Workbatch length: ' + workBatch.length + ', remaining: ' + self._batch.length);
+      sendRows(workBatch, function(err){
+        if (err){ return callback(err);}
+        processBatch();
       });
+    } else {
+      self._batchInProgress=false;
+      checkBatch();
+    }
+  }
+
+
+  /**
+   *
+   * Send rows to data db.
+   *
+   * @param rows
+   * @param callback
+   */
+  function sendRows(rows, callback){
+
+    var buildStatement = function(rows) {
+      var params = [];
+      var chunks = [];
+      for(var i = 0; i < rows.length; i++) {
+        var row = rows[ i];
+        var valuesClause = [];
+        for (var k=0;k<self._columns.length;k++) {
+          params.push(row[ k]);
+          valuesClause.push('$' + params.length);
+        }
+        chunks.push('(' + valuesClause.join(', ') + ')')
+      }
+      return {
+        text: 'INSERT INTO ' + self._tablename + ' (' + self._columns.join(',') + ') VALUES ' + chunks.join(', '),
+        values: params
+      }
+    };
+
+    // Execute the query
+    console.log('Inserting ' + rows.length + ' rows.');
+    var r = buildStatement(rows);
+    self._connection.data.client.query(r, function(err, result){
+      console.log('Batch inserted. ');
+      callback(err);
     });
   }
 
 
+  /**
+   *
+   * Processing finished, update cms and return to main processor.
+   *
+   */
+  function finish(){
+    console.log('Finished');
 
-  function sanitizeColumnNames(){
-    var fields = [];
-    columns.forEach(function(field){
-      field = '"' + field.replace(' ', '_').replace('.', '_').toLowerCase() + '"';
-      fields.push(field);
-    });
-    columns = fields;
+    // update Job status
+    var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql);
 
-    return columns;
+    // update Job status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+    self._rl.close();
+
+    callback();
   }
 
+  function handleError(msg){
+
+    console.log('Error!');
+    console.log(msg);
+
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\',"statusMsg"=\'' + msg+ '\' WHERE id=' + self._job.data.primaryId + ';';
+    self._connection.cms.client(sql),function(err,res){
+      console.log(err);
+      console.log(res);
+    };
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+    self._rl.close();
+  }
 };
+
+
+
+
+/**
+ *
+ * Validate and save columns to a new database table.
+ *
+ */
+CsvWorker.prototype.createTable = function(callback){
+  var self=this;
+  if (!self._columns){
+    return handleError('There was an error parsing the columns. ');
+  }
+  var sc = self.sanitizeColumnNames();
+  // assume all text column types for now.
+  sc = sc.join(' text, ') + ' text';
+
+  var sql = 'CREATE TABLE IF NOT EXISTS ' + self._tablename + ' (cid serial PRIMARY KEY, ' + sc + ', "created_at" timestamp, "updated_at" timestamp);';
+  console.log('Creating table: ', sql);
+
+  self._connection.data.client.query(sql, function(err){
+    if (err) {
+      console.log(err);
+      return callback(err);
+    }
+    console.log('Table created.');
+    self._tableCreated=true;
+    callback();
+  });
+};
+
+
+/**
+ *
+ * Make sure column names are valid for postgres
+ *
+ */
+CsvWorker.prototype.sanitizeColumnNames = function(){
+  var fields = [];
+
+  this._columns.forEach(function(field) {
+    field = '"_' + field.replace(' ', '_').replace('.', '_').toLowerCase() + '"';
+    fields.push(field);
+  });
+
+  this._columns = fields;
+
+  return this._columns;
+};
+
