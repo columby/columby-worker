@@ -2,97 +2,357 @@
 // example: http://www.denhaag.nl/ArcGIS/rest/services/Open_services/Kunstobjecten/MapServer/0
 
 var request = require('request'),
-    pg = require('pg'),
-    escape = require('pg-escape');
+  pg = require('pg'),
+  escape = require('pg-escape'),
+  config = require('../config/environment');
 
-var settings = require('../config/environment');
+
+var ArcgisWorker = module.exports = function(){
+  var self=this;
+
+  self._job        = null; 			// job
+  self._connection = null;
+  self._total      = null;					// total rows external dataset
+  self._version    = null;				// dataset version
+  self._stats      = null;					// dataset arcgis stats
+  self._batch      = null;					// all dataset ids
+  self._batchSize  = 100;
+  self._objectidpresent = true;
+  self._tablename  = null;
+  self._chunk_size = 100;		// chunk size scrape (rows per cycle)
+};
+
+
+ArcgisWorker.prototype.start = function(job,callback){
+  var self=this;
+  self._job = job;
+
+  connect(function(err) {
+    if (err) {
+      handleError('There as an error connecting to the DBs.');
+      //return callback(err)
+    }
+    // validate job data
+    validateData(function(err) {
+      if (err) {
+        console.log('There as an error validating the data.',err);
+        handleError('There as an error validating the data.');
+        //return callback(err)
+      }
+      // data processing
+      process(function (err) {
+        if (err) {
+          console.log('There as an error processing the data.',err);
+          handleError('There as an error processing the data.');
+          //return callback(err)
+        }
+        // finish
+        finish(function (err) {
+          if (err) {
+            console.log('There as an error finishing.',err);
+            handleError('There as an error finishing.');
+            //return callback(err)
+          }
+          // complete
+          callback(err);
+        });
+      });
+    });
+  });
+
+
+  /**
+   * Connect to CMS and GEO db
+   *
+   * @param callback
+   */
+  function connect(callback) {
+    self._connection = {};
+    // Connect to cms
+    pg.connect(config.db.cms.uri, function (err, client, done) {
+      if (err) { return callback(err); }
+      console.log('Connected to CMS DB');
+      self._connection.cms = {
+        client: client,
+        done: done
+      };
+      // Connect to postgis
+      pg.connect(config.db.postgis.uri, function (err, client, done) {
+        if (err) { return callback(err); }
+        console.log('Connected to Data DB.');
+        self._connection.data = {
+          client: client,
+          done: done
+        };
+        callback();
+      });
+    });
+  }
+
+
+  /**
+   *
+   * Validate if required elements in job are present.
+   *
+   * @param callback
+   *
+   */
+  function validateData(callback){
+
+    if (!self._job.data.primaryId) {
+      return callback('No primary ID!');
+    }
+    if (!self._job.data.url) {
+      return callback('No access url!');
+    }
+
+    self._tablename = 'primary_' + self._job.id;
+
+    callback();
+  }
+
+
+  /**
+   *
+   * Drop existing table and initiate
+   *
+   */
+  function process(callback) {
+
+    // drop existing database
+    self._connection.data.client.query('DROP TABLE IF EXISTS ' + self._tablename, function (err) {
+      if (err) { callback('Error create table if not exist'); }
+
+      // Update job status
+      var sql = 'UPDATE "Jobs" SET "status"=\'processing\' WHERE id=' + self._job.data.primaryId;
+      self._connection.cms.client.query(sql, function (err) {
+        if (err) { callback('eError updating jobstatus. ', err); }
+        processData(callback);
+      });
+    });
+  }
+
+
+  function processData(callback) {
+    console.log('Getting stats ...');
+    console.log(self._job.data.url);
+    request.get({
+      url: self._job.data.url + '?f=json&pretty=true',
+      json: true
+    }, function (err, res, data) {
+      if (err) {
+        console.log(err);
+        callback('Error getting stats');
+      } else {
+        console.log(data);
+        self._stats = data;
+        self._version = data.currentVersion;
+        self._columns = data.fields;
+
+        console.log('version', self._version);
+
+        if (!self._version) {
+          return callback('No current version found.');
+        }
+
+        // set batchParams based on version
+        var batchParams = {
+          f: 'pjson',
+          where: '1=1',
+          returnIdsOnly: 'false',
+          text: '',
+          returnGeometry: 'true',
+          geometryType: 'esriGeometryEnvelope',
+          spatialRel: 'esriSpatialRelIntersects',
+          outFields: '*',
+          outSR: '4326'
+        };
+        if (self.version === '10.04') {
+        }
+        if (self.version === '10.11') {
+        }
+        self._batchParams = batchParams;
+
+        //getids
+        console.log('Getting object ids ...');
+
+        var params = {
+          f: 'pjson',
+          objectIds: '',
+          where: '1=1',
+          returnIdsOnly: 'true',
+          text: '',
+          returnGeometry: 'false',
+          json: 'true'
+        };
+        request.get({
+          url: self._job.data.url + '/query',
+          qs: params
+        }, function (err, res, data) {
+          if (err) {
+            console.log(err);
+            callback('Error getting object ids.');
+          } else {
+            var data = JSON.parse(data);
+            self._batch = data.objectIds;
+            console.log('Received ' + data.objectIds.length + ' objectIds.');
+
+            checkBatch(callback);
+          }
+        });
+      }
+    });
+  }
+
+
+  function checkBatch(callback) {
+    console.log('checking batch');
+    if (!self._tableCreated){
+      console.log('creating table');
+      // Create table
+      createTable();
+    } else if (self._batch.length > 0){
+      console.log('Batch not empty, not processing, let\'s go!');
+      processBatch(function(err){
+        if (err){ callback(err);}
+      });
+    } else if(self._batch.length === 0){
+      finish();
+    }
+  }
+
+  function createTable(callback){
+    var esriconvertable = {
+      esriFieldTypeSmallInteger : 'TEXT',
+      esriFieldTypeInteger  	  : 'TEXT',
+      esriFieldTypeSingle     	: 'TEXT',
+      esriFieldTypeDouble   	  : 'TEXT',
+      esriFieldTypeString     	: 'TEXT',
+      esriFieldTypeDate	 		    : 'TEXT',
+      esriFieldTypeOID	  		  : 'TEXT',
+      esriFieldTypeGeometry 	  : 'TEXT',
+      esriFieldTypeBlob	 		    : 'TEXT',
+      esriFieldTypeRaster   	  : 'TEXT',
+      esriFieldTypeGUID	 		    : 'TEXT',
+      esriFieldTypeGlobalID 	  : 'TEXT',
+      esriFieldTypeXML	  		  : 'TEXT',
+      Latitude	  				      : 'TEXT'
+    };
+
+    // process each field to get columns
+    var columnNames = [];
+    var columnTypes = [];
+
+    self._columns.forEach(function(f) {
+      // convert esri types to postgis types
+      var type = esriconvertable[ f.type];
+      var value = f.name;
+      // create column for the type
+      columnNames.push(value);
+      columnTypes.push(type);
+    });
+
+    console.log(columnNames.indexOf('OBJECTID'));
+
+    if (columnNames.indexOf('_objectid') === -1 ) {
+      self._objectidpresent = false;
+      columnNames.push('_objectid');
+      columnTypes.push('TEXT');
+    }
+
+    columnNames = sanitizeColumnNames(columnNames);
+
+    // Add geometry and dates
+    columnNames.push('the_geom');
+    columnTypes.push('geometry');
+    columnNames.push('createdAt');
+    columnTypes.push('timestamp');
+    columnNames.push('updatedAt');
+    columnTypes.push('timestamp');
+
+    // create columns
+    var columns = [];
+    columnNames.forEach(function(v,k){
+      columns.push( v + ' ' + columnTypes[ k]);
+    });
+
+    // create table if not exists
+    var sql = 'CREATE TABLE IF NOT EXISTS ' + self._tablename + ' (cid serial PRIMARY KEY, ' + columns + ')';
+
+    self._connection.data.client.query(sql, function(err, result) {
+      if(err){
+        console.log('error create table if not exist', err);
+      } else {
+        self._tableCreated = true;
+        checkBatch();
+      }
+    });
+  }
+
+
+  function processBatch(callback) {
+    console.log('processing batch ' + self._batch.length);
+    if (self._batch.length>0){
+      self._batchInProgress = true;
+      var workBatch = self._batch.splice(0, self._batchSize);
+      console.log('Workbatch length: ' + workBatch.length + ', remaining: ' + self._batch.length);
+      sendRows(workBatch, function(err){
+        if (err){ return callback(err);}
+        processBatch();
+      });
+    } else {
+      self._batchInProgress=false;
+      checkBatch();
+    }
+  }
+
+  function sendRows(rows, callback){
+    console.log('sendRows');
+
+    callback();
+  }
+
+
+  function finish() {
+    console.log('Finished');
+
+    // update Job status
+    //var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
+    //self._connection.cms.client.query(sql);
+
+    // update Job status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+    //self._rl.close();
+
+    callback();
+
+  }
+
+
+  function sanitizeColumnNames(columns){
+    var fields = [];
+    columns.forEach(function(field) {
+      field = '"_' + field.replace(' ', '_').replace('.', '_').toLowerCase() + '"';
+      fields.push(field);
+    });
+
+    return fields;
+  }
+
+
+  function handleError(err){
+    console.log(err);
+  }
+
+};
+
 
 exports.go = function(job,data,done){
-
-  var self = this;
-
-  job.log('Starting job');
-
-  /* ----- Connection to databases ----- */
-  self.cmsClient = new pg.Client(settings.db.cms.uri);
-  self.dataClient = new pg.Client(settings.db.geo.uri);
-
-  self.cmsClient.connect(function(err){
-    if(err) done(err);
-  });
-  self.dataClient.connect(function(err) {
-    if (err) done(err);
-  });
-
-
-
-
-	// some basic vars
-	self.job = job; 			// kue job
-	self.done = done; 			// kue done() function
-	self.columby_data = data; 	// columby dataset metadata
-	self.url; 					// arcgis dataUrl
-	self.total;					// total rows external dataset
-	self.version;				// dataset version
-	self.stats;					// dataset arcgis stats
-	self.ids;					// all dataset ids
-	// self.job.data.chunk; 	// current chunk as processed
-	self.objectidpresent = true;
-
-	// settings
-	self.settings = settings;
-	self.tablename = 'primary_' + data.primary.id;
-
-	// options
-	self.chunk_size = 100;		// chunk size scrape (rows per cycle)
-	// self.max_test_chunks = 9999;	// maximum of test cycles
-
-
-	// RUN:
-	self.init = function(){
-
-		//var idx = self.columby_data.primary.distribution_id.indexOf(self.columby_data.distributions);
-		//if (idx === -1){
-		//	self.done("no accessUrl found");
-		//} else {
-		//	self.url = self.columby_data.distributions[ idx].accessUrl;
-		//}
-
-		// get accessUrl from primary distribution
-		for(var i = 0; i < self.columby_data.distributions.length; i++){
-			if(self.columby_data.distributions[i].id==self.columby_data.primary.distribution_id){
-				var url = self.columby_data.distributions[i].accessUrl;
-				self.url = url;
-			}
-		}
-		if(!url) self.end('No accessUrl found');
-
-		start();
-		// run
-		self.get_stats();
-	};
-
-	function start(){
-		// general
-		console.log('Start job: ' + self.job.data.title);
-		console.log('AccessUrl: ' + self.url);
-
-		// drop table of exists
-		if(!self.job.data.chunk){
-			self.cmsClient.query('DROP TABLE IF EXISTS ' + self.tablename + ';',function(err, result) {
-				if(err) self.end("error create table if not exist");
-			});
-		}
-
-		// Update the CMS
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'processing\' WHERE id=' + self.columby_data.primary.id + ';';
-		self.cmsClient.query(sql, function(err,result){
-			// error query
-			if(err){
-				console.log(err);
-			}
-		})
-	};
 
 	this.end = function(message){
     job.log('Finishing job');
@@ -127,48 +387,6 @@ exports.go = function(job,data,done){
 
 	// running functions (in order of appearence)
 
-	this.get_stats = function(){
-		console.log("getting stats...");
-
-		var params = {"f":"json","pretty":"true"};
-		request.get({url:this.url,qs:params,json:true},function(error,response,data){
-			if(error) self.end("error getting stats");
-			else {
-				self.stats = data;
-				self.version = data.currentVersion;
-				// -->
-				self.get_ids();
-			}
-		});
-	};
-
-	this.get_ids = function(){
-		console.log("getting object ids...");
-
-		var params = {"f" :"pjson",
-	  					"objectIds":"",
-	  					"where":"1=1",
-	  					"returnIdsOnly":"true",
-	  					"text":"",
-	  					"returnGeometry":"false"};
-
-	  	request.get({url:this.url+"/query",qs:params,json:true},function(error,response,data){
-			if(error) self.end("error getting stats");
-			else {
-				self.ids = data.objectIds;
-				console.log("split ids in chunks of "+self.chunk_size);
-				self.chunks = [];
-				for (var i=0; i<self.ids.length; i++) {
-					var part = parseInt(i / self.chunk_size);
-					if(!self.chunks[part]) self.chunks[part] = [];
-					self.chunks[part].push(self.ids[i]);
-				}
-				// -->
-				self.get_records();
-			}
-		});
-	};
-
 	this.get_total = function(){
 		var params = {"f":"pjson",
 						"objectIds":"",
@@ -184,49 +402,9 @@ exports.go = function(job,data,done){
 		});
 	};
 
-	this.get_records = function(){
 
-		console.log("get and process rows chunk by chunk...");
+  this.get_records_recursive = function(chunki){
 
-		// continue or start
-
-		var start = self.job.data.chunk ? self.job.data.chunk : 0;
-
-		var result = self.get_records_recursive(start);
-	};
-
-	this.get_records_recursive = function(chunki){
-		console.log("get chunk #"+chunki+"...");
-
-		var ids = self.chunks[chunki];
-
-		if(self.version=="10.04"){
-			var params = {
-						"f"			 	: "pjson",
-						"where"		 	: "1=1",
-						"returnIdsOnly" : "false",
-						"text"		  	: "",
-						"returnGeometry": "true",
-						"geometryType"  : "esriGeometryEnvelope",
-						"spatialRel"	: "esriSpatialRelIntersects",
-						"outFields"	 	: "*",
-						"outSR"		 	: "4326",
-						"objectIds"	 	: ids};
-		}
-
-		if(self.version=="10.11"){
-			var params = {
-						"f"			 	: "pjson",
-						"where"		 	: "1=1",
-						"returnIdsOnly" : "false",
-						"text"		  	: "",
-						"returnGeometry": "true",
-						"geometryType"  : "esriGeometryEnvelope",
-						"spatialRel"	: "esriSpatialRelIntersects",
-						"outFields"	 	: "*",
-						"outSR"		 	: "4326",
-						"objectIds"	 	: ids}
-		}
 
 		// GET url (for debugging)
 		var str = [];
@@ -253,10 +431,7 @@ exports.go = function(job,data,done){
 
 		self.columns = self.define_columns(data);
 
-		// create table if not exists
-		self.dataClient.query("CREATE TABLE IF NOT EXISTS "+self.tablename+" (cid serial PRIMARY KEY, "+self.columns+");",function(err, result) {
-			if(err) end("error create table if not exist");
-		});
+
 
 		// insert data ------------------------------------------------------------------------------------------
 
@@ -332,224 +507,4 @@ exports.go = function(job,data,done){
 			}
 		});
 	};
-
-
-
-	// functionality functions (great fun)
-
-	this.define_columns = function(data){
-
-		var esriconvertable = {	"esriFieldTypeSmallInteger" : "TEXT",
-								"esriFieldTypeInteger"  	: "TEXT",
-								"esriFieldTypeSingle"   	: "TEXT",
-								"esriFieldTypeDouble"   	: "TEXT",
-								"esriFieldTypeString"   	: "TEXT",
-								"esriFieldTypeDate"	 		: "TEXT",
-								"esriFieldTypeOID"	  		: "TEXT",
-								"esriFieldTypeGeometry" 	: "TEXT",
-								"esriFieldTypeBlob"	 		: "TEXT",
-								"esriFieldTypeRaster"   	: "TEXT",
-								"esriFieldTypeGUID"	 		: "TEXT",
-								"esriFieldTypeGlobalID" 	: "TEXT",
-								"esriFieldTypeXML"	  		: "TEXT",
-								"Latitude"	  				: "TEXT"};
-
-		// process each field to get columns
-		var columnNames = [];
-		var columnTypes = [];
-
-		// if ObjectID does not exist, add it to first column
-		var found = false;
-		data.fields.forEach(function(f){ if(f.name=="OBJECTID") found = true; });
-		if(!found){
-			self.objectidpresent = false;
-			columnNames.push("OBJECTID");
-            columnTypes.push("TEXT");
-		}
-
-		data.fields.forEach(function(f){
-			// convert esri types to postgis types
-			var type = esriconvertable[f.type];
-			var value = f.name;
-			// create column for the type
-			columnNames.push(value);
-			columnTypes.push(type);
-		});
-
-		// add geometry and dates
-		columnNames.push("the_geom");
-		columnTypes.push("geometry");
-		columnNames.push("createdAt");
-		columnTypes.push("timestamp");
-		columnNames.push("updatedAt");
-		columnTypes.push("timestamp");
-
-		var sqlcolumns = [];
-		// Sanitize the column values;
-		columnNames = self.sanitize_columns(columnNames);
-		self.columnNames = columnNames;
-		columnNames.forEach(function(v,k){
-			sqlcolumns.push(v+" "+columnTypes[k]);
-		});
-
-		return sqlcolumns.join(",");
-	};
-
-	this.sanitize_columns = function(columns){
-
-		var fields = [];
-		columns.forEach(function(field){
-			field = field.replace(' ', '_');
-			field = field.replace('.', '_');
-			field = field.toLowerCase();
-			fields.push(field);
-		});
-		return fields;
-	};
-
-	this.init();
-
-	return this;
-
 };
-
-
-// -------------------------- TEST -------------------------- //
-
-var exampledata = { id: 158,
-  shortid: 'MWLxdxJ29Pr',
-  uuid: '2ae33e41-6ca1-4c7e-869b-b84fa4c178e0',
-  title: 'Kunstobjecten in de openbare ruimte',
-  slug: null,
-  description: 'Den Haag telt circa 400 beelden in de openbare ruimte. Onder een beeld wordt hier verstaan: een driedimensionaal kunstwerk in de openbare ruimte.  Deze dataset bevat de locaties en omschrijving van beelden in de openbare ruimte in Den Haag. De dataset wordt wekelijks bijgewerkt.\n',
-  private: false,
-  created_at: '2014-10-24T09:22:07.000Z',
-  updated_at: '2015-01-08T18:23:30.541Z',
-  account_id: 311,
-  headerimg_id: 1,
-  distributions:
-   [ { id: 178,
-	   shortid: 'EKrWNWRV9wl',
-	   title: 'Download',
-	   type: 'localFile',
-	   status: 'draft',
-	   valid: false,
-	   description: null,
-	   issued: null,
-	   modified: null,
-	   license: 'CC0',
-	   rights: null,
-	   accessUrl: null,
-	   downloadUrl: 'http://beta.columby.com/sites/default/files/datasets/2ae33e41-6ca1-4c7e-869b-b84fa4c178e0.csv',
-	   mediaType: null,
-	   format: null,
-	   byteSize: null,
-	   created_at: '2014-12-30T21:16:13.000Z',
-	   updated_at: '2014-12-30T21:16:13.475Z',
-	   account_id: null,
-	   dataset_id: 158,
-	   file_id: null },
-	 { id: 89,
-	   shortid: 'yoJg7v1zyW',
-	   title: 'Remote service link',
-	   type: 'remoteService',
-	   status: 'draft',
-	   valid: true,
-	   description: null,
-	   issued: null,
-	   modified: null,
-	   license: 'CC0',
-	   rights: null,
-	   accessUrl: 'http://www.denhaag.nl/ArcGIS/rest/services/Open_services/Kunstobjecten/MapServer/0',
-	   downloadUrl: null,
-	   mediaType: 'link',
-	   format: 'link',
-	   byteSize: null,
-	   created_at: '2014-12-30T21:16:12.000Z',
-	   updated_at: '2014-12-30T21:17:34.451Z',
-	   account_id: null,
-	   dataset_id: 158,
-	   file_id: null } ],
-  primary:
-   { id: 1,
-	 shortid: '14dg6e5q3K',
-	 status: 'draft',
-	 statusMsg: null,
-	 syncPeriod: null,
-	 syncDate: null,
-	 created_at: '2014-12-30T21:17:39.000Z',
-	 updated_at: '2014-12-30T21:17:39.236Z',
-	 dataset_id: 158,
-	 distribution_id: 89 },
-  tags: [],
-  headerImg:
-   { id: 1,
-	 shortid: 'DMeN9xpVDl',
-	 type: 'image',
-	 filename: '527729_500330486644412_1797308598_n-26-7-1.jpeg',
-	 filetype: 'image/jpeg',
-	 title: null,
-	 description: null,
-	 url: 'https://columby-dev.s3.amazonaws.com/accounts/311/images/527729_500330486644412_1797308598_n-26-7-1.jpeg',
-	 status: true,
-	 size: 133738,
-	 created_at: '2014-12-30T22:20:15.000Z',
-	 updated_at: '2014-12-30T22:20:17.135Z',
-	 account_id: 311 },
-  account:
-   { id: 311,
-	 uuid: '10043b3f-8ba9-449d-b83d-f42141cd57f9',
-	 shortid: 'D61ANA2E7kP',
-	 name: 'Gemeente Den Haag',
-	 slug: 'gemeente-den-haag',
-	 description: 'De gemeente heeft Columby als distributieplatform gekozen om haar open data te publiceren. De gemeente heeft een schat aan informatie. Over alles wat zichtbaar is in de openbare ruimte, geografische data, statistieken over de bevolking en over toekomstige ontwikkelingen. Een deel hiervan publiceren wij als vrij beschikbare data. Zo stimuleren we het hergebruik van informatie, leveren we een bijdrage aan een transparante overheid en helpen we met samenwerking tussen de gemeente en haar partners. De informatie bevat geen juridisch advies en wordt alleen aangeboden voor algemene informatieve doeleinden, zonder dat voor de juistheid ervan expliciet of impliciet een garantie wordt gegeven. Als u vragen of suggesties heeft, stuur dan een mail naar opendata@denhaag.nl',
-	 primary: false,
-	 created_at: '2014-12-30T21:16:09.000Z',
-	 updated_at: '2014-12-30T22:28:34.032Z',
-	 avatar_id: 4,
-	 headerimg_id: 3,
-	 avatar:
-	  { id: 4,
-		shortid: 'MKmdRm3Kqv',
-		type: 'image',
-		filename: '536979_562662583764926_784156659_n-4.jpg',
-		filetype: 'image/jpeg',
-		title: null,
-		description: null,
-		url: 'https://columby-dev.s3.amazonaws.com/accounts/311/images/536979_562662583764926_784156659_n-4.jpg',
-		status: true,
-		size: 29303,
-		created_at: '2014-12-30T22:28:33.000Z',
-		updated_at: '2014-12-30T22:28:34.016Z',
-		account_id: 311 },
-	 headerImg:
-	  { id: 3,
-		shortid: 'OWYE0Yx32P',
-		type: 'image',
-		filename: '536979_562662583764926_784156659_n-3.jpg',
-		filetype: 'image/jpeg',
-		title: null,
-		description: null,
-		url: 'https://columby-dev.s3.amazonaws.com/accounts/311/images/536979_562662583764926_784156659_n-3.jpg',
-		status: true,
-		size: 29303,
-		created_at: '2014-12-30T22:26:11.000Z',
-		updated_at: '2014-12-30T22:26:12.528Z',
-		account_id: 311 } },
-  references:
-   [ { id: 1,
-	   description: 'NOS.nl - Nieuws, Sport en Evenementen op Radio, TV en Internet',
-	   url: 'http://nos.nl/',
-	   title: 'Nederlandse Omroep Stichting',
-	   provider_name: 'Nos',
-	   provider_display: 'nos.nl',
-	   image: 'http://nos.nl/img/social/nos.jpg?141223',
-	   updated_at: '2014-12-30T21:19:00.219Z',
-	   dataset_id: 158 } ] }
-
-var examplejobdata = {"type": "arcgis",
-						"data": {
-							"title": "Fetch data from http://188.166.31.214:8000/api/v2/dataset/ with ID MWLxdxJ29Pr",
-							"ID": "MWLxdxJ29Pr"
-							}
-						}

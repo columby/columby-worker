@@ -11,7 +11,7 @@ var fs = require('fs'),
 
 
 
-var CsvWorker = module.exports = function(job, callback) {
+var CsvWorker = module.exports = function() {
   var self=this;
 
   self._tablename = null;

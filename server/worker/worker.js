@@ -83,7 +83,14 @@ Worker.prototype.start = function() {
     self._processing = true;
 
     // select the next job in queue
-    var sql='SELECT * FROM "Jobs" WHERE "Jobs"."status"=\'active\' ORDER BY "created_at" DESC LIMIT 1';
+    var sql =
+      'SELECT ' +
+        '* ' +
+      'FROM ' +
+        '"Jobs" ' +
+      'WHERE "Jobs"."status"=\'active\' ' +
+      'ORDER BY "created_at" DESC ' +
+      'LIMIT 1';
     self._connection.client.query(sql, function(err, result){
 
       // return and turn off processing flag if error.
@@ -138,14 +145,15 @@ Worker.prototype.start = function() {
             'SELECT ' +
               '"Primaries".id AS "primaryId", ' +
               '"Distributions".id AS "distributionId", ' +
-              '"Distributions"."accessUrl AS "url '+
+              '"Distributions"."accessUrl" AS "url" '+
             'FROM "Primaries" ' +
-              'LEFT JOIN "Distributions' +
-                'ON "Primaries"."distribution_id"="Distributions"."id"' +
+              'LEFT JOIN "Distributions" ' +
+                'ON "Primaries"."distribution_id"="Distributions"."id" ' +
             'WHERE "Primaries".dataset_id=' + self._job.dataset_id;
+          console.log('sql', sql);
           self._connection.client.query(sql, function(err,result){
             if (err){ return handleProcessedJob(err,null); }
-            if (!result.rows[ 0]){ return handleProcessedJob(err,null); }
+            if (!result.rows[ 0]){ return handleProcessedJob('No valid record found. ',null); }
             self._job.data = result.rows[ 0];
             var arcgis = new arcgisWorker();
             arcgis.start(self._job, handleProcessedJob);
