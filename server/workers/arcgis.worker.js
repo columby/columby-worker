@@ -144,7 +144,6 @@ ArcgisWorker.prototype.start = function(job,callback){
         console.log(err);
         callback('Error getting stats');
       } else {
-        console.log(data);
         self._stats = data;
         self._version = data.currentVersion;
         self._columns = data.fields;
@@ -194,8 +193,10 @@ ArcgisWorker.prototype.start = function(job,callback){
             callback('Error getting object ids.');
           } else {
             var data = JSON.parse(data);
-            self._batch = data.objectIds;
-            console.log('Received ' + data.objectIds.length + ' objectIds.');
+            data = data.objectIds;
+            data.sort(sortNumber);
+            self._batch = data;
+            console.log('Received ' + data.length + ' objectIds.');
 
             checkBatch(callback);
           }
@@ -206,17 +207,19 @@ ArcgisWorker.prototype.start = function(job,callback){
 
 
   function checkBatch(callback) {
-    console.log('checking batch');
+    console.log('Checking batch. ');
     if (!self._tableCreated){
-      console.log('creating table');
+      console.log('Table not yet created, creating table.');
       // Create table
       createTable();
-    } else if (self._batch.length > 0){
-      console.log('Batch not empty, not processing, let\'s go!');
+    } else if ( (self._batch.length > 0) && (!self._batchInProgress) ){
+      console.log('Batch not empty and not in progress, let\'s go!');
       processBatch(function(err){
-        if (err){ callback(err);}
+        if (err){
+          handleError(err);}
       });
     } else if(self._batch.length === 0){
+      console.log('Batch all done');
       finish();
     }
   }
@@ -265,10 +268,13 @@ ArcgisWorker.prototype.start = function(job,callback){
     // Add geometry and dates
     columnNames.push('the_geom');
     columnTypes.push('geometry');
-    columnNames.push('createdAt');
+    columnNames.push('created_at');
     columnTypes.push('timestamp');
-    columnNames.push('updatedAt');
+    columnNames.push('updated_at');
     columnTypes.push('timestamp');
+
+    self._columns = columnNames;
+    self._columnTypes = columnTypes;
 
     // create columns
     var columns = [];
@@ -290,12 +296,17 @@ ArcgisWorker.prototype.start = function(job,callback){
   }
 
 
+  /**
+   *
+   * Recursively process the current batch
+   *
+   */
   function processBatch(callback) {
-    console.log('processing batch ' + self._batch.length);
+    console.log('Processing batch with size: ' + self._batch.length);
     if (self._batch.length>0){
       self._batchInProgress = true;
       var workBatch = self._batch.splice(0, self._batchSize);
-      console.log('Workbatch length: ' + workBatch.length + ', remaining: ' + self._batch.length);
+      console.log('Workbatch length: ' + workBatch.length + ', remaining in batch: ' + self._batch.length);
       sendRows(workBatch, function(err){
         if (err){ return callback(err);}
         processBatch();
@@ -306,10 +317,76 @@ ArcgisWorker.prototype.start = function(job,callback){
     }
   }
 
-  function sendRows(rows, callback){
-    console.log('sendRows');
 
-    callback();
+  function sendRows(rows, callback){
+    console.log('Send rows:', rows.length);
+
+    // Get records
+    var params = {
+      geometryType: 'esriGeometryPoint',
+      spatialRel: 'esriSpatialRelIntersects',
+      where: '1=1',
+      returnCountOnly: 'false',
+      returnIdsOnly: 'false',
+      returnGeometry: 'true',
+      outSR: '4326',
+      outFields: '*',
+      f: 'pjson',
+      objectIds: rows.join(',')
+    };
+
+    console.log(params);
+
+    // GET url (for debugging)
+    request.get({
+      url: self._job.data.url + '/query',
+      qs: params,
+      json:true}, function(err,res,data){
+      if (err) {
+        console.log(err);
+        return callback('Error getting data.');
+      } else {
+
+        // Process data
+        data = processGeodata(data);
+
+        // build query
+        var buildStatement = function(rows) {
+          console.log('preparing length: ' + rows.length);
+          console.log(self._columns.length);
+          var params = [];
+          var chunks = [];
+          for(var i = 0; i < 1; i++) {
+            var row = rows[ i];
+            console.log(row.length);
+            var valuesClause = [];
+            for (var k=0;k<row.length;k++) {
+              params.push(row[ k]);
+              valuesClause.push('$' + params.length);
+            }
+            chunks.push('(' + valuesClause.join(', ') + ')');
+          }
+          return {
+            text: 'INSERT INTO ' + self._tablename + ' (' + self._columns.join(',') + ') VALUES ' + chunks.join(', '),
+            values: params
+          }
+        };
+
+        var sql = buildStatement(data);
+        console.log(sql);
+        self._connection.data.client.query(sql, function(err, result) {
+          if (err) {
+            console.log(err);
+            return callback(err);
+          } else {
+            console.log('inserted ' + data.length + ' rows');
+            // if(chunki<self.chunks.length && chunki<self.max_test_chunks){
+
+            checkBatch();
+          }
+        });
+      }
+    });
   }
 
 
@@ -345,8 +422,73 @@ ArcgisWorker.prototype.start = function(job,callback){
   }
 
 
+
+  function processGeodata(data){
+
+    // Process data
+    if (data.features.length<1) {
+      console.log('No features in the data.');
+      return
+    }
+
+    // array for all value rows.
+    var valueLines = [];
+    for(var i=0; i<data.features.length; i++){
+
+      var row = data.features[ i];
+
+      var values = [];
+      for(var k in row.attributes) values.push(row.attributes[ k]);
+
+      // add current id if OBJECTID field is missing
+      if(!self._objectidpresent) values.unshift('1');
+
+      // escape string
+      values.forEach(function(v,k) {
+        if(!v || v === '') v = 'null';
+        else {
+          //v = String(v).replace(/'/g, '\'\'');
+          //v = '\'' + escape(String(v)) + '\'';
+        }
+        values[ k] = v;
+      });
+
+      // get geodata
+      if (row.geometry.x && row.geometry.y) {
+        values.push("ST_GeomFromText('POINT(" + row.geometry.x + " " + row.geometry.y + "'), 4326)");
+      } else if (row.geometry.rings) {
+        var points = [];
+        row.geometry.rings[ 0].forEach(function(v,k) {
+          points.push(v[ 0] + ' ' + v[1]);
+        });
+        var pointString = points.join(',');
+        values.push("ST_GeomFromText('POLYGON((" + pointString + "))', 4326)");
+      } else {
+        values.push('null');
+      }
+
+      // set dates
+      var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+      values.push(now);  // createdAt
+      values.push(now);  // updatedAt
+
+      // add to valueLines
+      valueLines.push(values);
+    }
+
+    return valueLines;
+  }
+
   function handleError(err){
+    console.log('___error___');
     console.log(err);
+  }
+
+
+
+  /*-- helpers --*/
+  function sortNumber(a,b) {
+    return a - b;
   }
 
 };
@@ -385,8 +527,6 @@ exports.go = function(job,data,done){
 		}
 	};
 
-	// running functions (in order of appearence)
-
 	this.get_total = function(){
 		var params = {"f":"pjson",
 						"objectIds":"",
@@ -402,109 +542,7 @@ exports.go = function(job,data,done){
 		});
 	};
 
-
   this.get_records_recursive = function(chunki){
-
-
-		// GET url (for debugging)
-		var str = [];
-		for(var k in params){ str.push(k+"="+params[k]);};
-		var get_url = this.url+"/query?"+str.join("&");
-		// console.log(get_url);
-
-		request.get({url:get_url,qs:{},json:true},function(error,response,data){
-			if(error) self.end("error getting total");
-			else {
-				self.put_in_storage(data,ids,chunki);
-			}
-		});
 	};
 
-	this.put_in_storage = function(data,current_ids,chunki){
-		// WRITE DATA TO DB HERE
-		// where tablename = primary_ID
-
-		if(data.features.length<1){
-			self.end();
-			return true;
-		}
-
-		self.columns = self.define_columns(data);
-
-
-
-		// insert data ------------------------------------------------------------------------------------------
-
-		// array for all value rows.
-		var valueLines = [];
-
-		for(var i=0; i<data.features.length; i++){
-
-			var row = data.features[i];
-
-			var values = [];
-			for(var k in row.attributes) values.push(row.attributes[k]);
-
-			// add current id if OBJECTID field is missing
-			if(!self.objectidpresent) values.unshift(current_ids[i]);
-
-			// escape string
-			values.forEach(function(v,k){
-				if(!v || v=="") v = "null";
-				else {
-					// escape ' -> ?!
-					v = String(v).replace(/'/g, "''");
-					v = "'"+escape(String(v))+"'";
-					// v = "'"+"nothing"+"'";
-				}
-				values[k] = v;
-			});
-
-			// get geodata
-			if(row.geometry.x && row.geometry.y){
-				values.push("ST_GeomFromText('POINT("+row.geometry.x+" "+row.geometry.y+")', 4326)");
-				// values.push("null");
-			} else if(row.geometry.rings){
-				var points = [];
-				row.geometry.rings[0].forEach(function(v,k){
-					points.push(v[0]+" "+v[1]);
-				})
-				var pointString = points.join(",");
-				values.push("ST_GeomFromText('POLYGON(("+pointString+"))', 4326)");
-				// values.push("null");
-			} else {
-				values.push("null");
-			}
-
-			// set dates
-			var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-			values.push("'"+now+"'");  // createdAt
-        	values.push("'"+now+"'");  // updatedAt
-
-        	// create string from values
-        	values = values.join(", ");
-
-        	// add to valueLines
-
-        	valueLines.push("("+values+")");
-		}
-		valueLines = valueLines.join(", ");
-
-		var query = "INSERT INTO "+self.tablename+" ("+self.columnNames+") VALUES "+valueLines+";";
-		self.dataClient.query(query,function(err, result) {
-
-			if(err) {
-				// console.log("+++ INSERT ERROR +++ ");
-				// console.log(query.substring(0,5000));
-				console.log("features length",data.features.length);
-				self.end(err);
-			} else {
-				console.log("inserted "+current_ids.length+" rows");
-				// if(chunki<self.chunks.length && chunki<self.max_test_chunks){
-				self.job.data.chunk = chunki;
-				if(self.job.progress) self.job.progress(chunki,self.chunks.length);
-				self.get_records_recursive(chunki+1);
-			}
-		});
-	};
 };
