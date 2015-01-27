@@ -21,7 +21,6 @@ var config = require('../config/environment/index'),
 exports.checkJWT = function(req,res,next){
   console.log('checking jwt');
   if (!req.user) { req.user={}; }
-
   // Decode the token if present
   if (req.headers.authorization){
     console.log('header', req.headers.authorization);

@@ -9,15 +9,14 @@ var express = require('express'),
 module.exports = function(app) {
 
   // get job listing
-  router.get('/'       , auth.checkJWT, jobCtrl.canManage, jobCtrl.home);
-  router.get('/status' , auth.checkJWT, jobCtrl.canManage, jobCtrl.status);
-  router.get('/stats'  , auth.checkJWT, jobCtrl.canManage, jobCtrl.stats);
+  router.get('/'       , auth.checkJWT, jobCtrl.home);
+  router.get('/status' , auth.checkJWT, jobCtrl.status);
+  router.get('/stats'  , auth.checkJWT, jobCtrl.stats);
 
   // get specific job
-  router.get('/job'        , auth.checkJWT, jobCtrl.canManage, jobCtrl.index);
-  router.get('/job/start'  , auth.checkJWT, jobCtrl.canManage, jobCtrl.start);
-  router.get('/job/:id'    , auth.checkJWT, jobCtrl.canManage, jobCtrl.show);
-  router.get('/job/:id/log', auth.checkJWT, jobCtrl.canManage, jobCtrl.start);
+  router.get('/job'        , auth.checkJWT, jobCtrl.index);
+  router.get('/job/:id'    , auth.checkJWT, jobCtrl.show);
+  router.get('/job/:id/log', auth.checkJWT, jobCtrl.jobLog);
 
   router.post('/job'       , auth.checkJWT, jobCtrl.canManage, jobCtrl.create);
 

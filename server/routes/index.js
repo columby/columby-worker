@@ -19,7 +19,7 @@ module.exports = function(app) {
   // All other routes should redirect to the index.html
   app.route('/*')
     .get(function(req,res){
-      return res.json({status: 'not found'});
+      return res.json({home: 'Columby Worker',status: '404'});
     });
 };
 

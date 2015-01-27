@@ -5,6 +5,7 @@
   </div>
 
   <div class="content">
+    <h3>Stats</h3>
     <ul>
       <li>Inactive: {{stats.inactiveCount}}</li>
       <li>Active: {{stats.activeCount}}</li>
@@ -13,6 +14,29 @@
       <li>Delayed: {{stats.delayedCount}}</li>
     </ul>
 
+    <h3>Jobs</h3>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>id</th>
+          <th>status</th>
+          <th>type</th>
+          <th>error</th>
+          <th>dataset_id</th>
+          <th>created_at</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr ng-repeat="job in jobs">
+          <td>{{job.id}}</td>
+          <td>{{job.status}}</td>
+          <td>{{job.type}}</td>
+          <td>{{job.error}}</td>
+          <td>{{job.dataset_id}}</td>
+          <td>{{job.created_at}}</td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
