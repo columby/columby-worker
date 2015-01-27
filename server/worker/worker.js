@@ -109,10 +109,11 @@ Worker.prototype.start = function() {
       }
 
       // Determine job type and process it
+      var sql;
       switch(self._job.type){
         case 'csv':
           // get file url
-          var sql=
+          sql=
             'SELECT ' +
               '"Primaries".id AS "primaryId", ' +
               '"Distributions".id AS "distributionId", '+
@@ -141,7 +142,7 @@ Worker.prototype.start = function() {
 
         case 'arcgis':
           // get url
-          var sql=
+          sql=
             'SELECT ' +
               '"Primaries".id AS "primaryId", ' +
               '"Distributions".id AS "distributionId", ' +
@@ -161,8 +162,26 @@ Worker.prototype.start = function() {
           break;
 
         case 'fortes':
-          var fortes = new fortesWorker();
-          fortes.start(self._job, handleProcessedJob);
+          sql=
+            'SELECT ' +
+              '"Primaries".id AS "primaryId", ' +
+              '"Distributions".id AS "distributionId" '+
+            'FROM "Primaries" ' +
+              'LEFT JOIN "Distributions" ' +
+                'ON "Primaries"."distribution_id"="Distributions"."id" ' +
+            'WHERE "Primaries".dataset_id=' + self._job.dataset_id;
+          self._connection.client.query(sql, function(err,result){
+            // Handle error
+            if (err){return handleProcessedJob(err, null);}
+            if ( result.rows[0]) {
+              self._job.data = result.rows[0];
+              var fortes = new fortesWorker();
+              // Start processing
+              fortes.start(self._job, handleProcessedJob);
+            } else {
+              handleProcessedJob('No valid record found. ', null);
+            }
+          });
           break;
 
         default:

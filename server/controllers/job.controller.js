@@ -33,8 +33,9 @@ function finish(job){
 
 }
 
-/** -------- HELPER FUNCTIONS -------------------------- **/
 
+
+/** -------- HELPER FUNCTIONS -------------------------- **/
 function validType(type){
   var types=['csv','arcgis','fortes'];
   return (types.indexOf(type) !== -1);
