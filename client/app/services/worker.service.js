@@ -2,15 +2,15 @@
 
 angular.module('columbyworkerApp')
 
-  .service('KueService', function($http) {
+  .service('WorkerService', function($http) {
 
     return {
       stats: function () {
         return $http({
           method: 'GET',
-          url: '/stats'
+          url: '/api/stats'
         }).then(function (result) {
-          console.log(result);
+          console.log('status: ', result.data);
           return result.data;
         });
       },
@@ -18,10 +18,12 @@ angular.module('columbyworkerApp')
       jobs: function(params){
         return $http({
           method: 'get',
-          url: 'jobs',
-
-        })
+          url: '/api/job',
+          params: params
+        }).then(function(result){
+          console.log('jobs: ', result.data);
+          return result.data;
+        });
       }
-
     }
   });

@@ -11,7 +11,6 @@ var config    = require('./../config/environment/index');
  *
  **/
 var sequelize = new Sequelize(config.db.cms.uri, {
-    dialect: config.db.dialect,
     logging: false,
     define: {
       underscored: true,

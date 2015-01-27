@@ -29,8 +29,6 @@ angular
   // Set the JWT if it is stored
   .config(function($httpProvider, jwtInterceptorProvider) {
     jwtInterceptorProvider.tokenGetter = function() {
-      console.log('checking token');
-      console.log(angular.fromJson(localStorage.getItem('columby_token')));
       return angular.fromJson(localStorage.getItem('columby_token'));
     };
     $httpProvider.interceptors.push('jwtInterceptor');
@@ -42,7 +40,7 @@ angular
     $rootScope.user = {};
     $rootScope.config = configSrv;
 
-    //if (localStorage.getItem('columby_token')) {
+    if (localStorage.getItem('columby_token')) {
       AuthSrv.me().then(function (response) {
         console.log(response);
         if (response.status === 'error') {
@@ -53,7 +51,7 @@ angular
           $rootScope.user = response;
         }
       });
-    //}
+    }
   })
 
   .controller('AppController', function(){

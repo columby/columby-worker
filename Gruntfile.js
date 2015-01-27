@@ -206,7 +206,7 @@ module.exports = function (grunt) {
             // opens browser on initial server start
             nodemon.on('config:update', function () {
               setTimeout(function () {
-                require('open')('http://localhost:8080/debug?port=5858');
+                require('open')('http://localhost:8080/debug?port=5857');
               }, 500);
             });
           }
@@ -307,7 +307,7 @@ module.exports = function (grunt) {
     ngtemplates: {
       options: {
         // This should be the name of your apps angular module
-        module: 'columbyWorkerApp',
+        module: 'columbyworkerApp',
         htmlmin: {
           collapseBooleanAttributes: true,
           collapseWhitespace: true,
@@ -483,10 +483,10 @@ module.exports = function (grunt) {
         },
         files: {
           '<%= yeoman.client %>/index.html': [
-            ['{.tmp,<%= yeoman.client %>}/app/**/*.js',
+            ['{.tmp,<%= yeoman.client %>}/{app,components}/**/*.js',
               '!{.tmp,<%= yeoman.client %>}/app/app.js',
-              '!{.tmp,<%= yeoman.client %>}/app/**/*.spec.js',
-              '!{.tmp,<%= yeoman.client %>}/app/**/*.mock.js']
+              '!{.tmp,<%= yeoman.client %>}/{app,components}/**/*.spec.js',
+              '!{.tmp,<%= yeoman.client %>}/{app,components}/**/*.mock.js']
           ]
         }
       },
@@ -503,7 +503,7 @@ module.exports = function (grunt) {
         },
         files: {
           '<%= yeoman.client %>/assets/styles/app.less': [
-            '<%= yeoman.client %>/assets/styles/**/*.less',
+            '<%= yeoman.client %>/{assets,app}/**/*.less',
             '!<%= yeoman.client %>/assets/styles/app.less'
           ]
         }
@@ -522,7 +522,7 @@ module.exports = function (grunt) {
         },
         files: {
           '<%= yeoman.client %>/index.html': [
-            '<%= yeoman.client %>/{app,components,styles}/**/*.css'
+            '<%= yeoman.client %>/{app,components}/**/*.css'
           ]
         }
       }
