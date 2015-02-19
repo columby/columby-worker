@@ -307,7 +307,7 @@ module.exports = function (grunt) {
     ngtemplates: {
       options: {
         // This should be the name of your apps angular module
-        module: 'columbyWorkerApp',
+        module: 'columbyworkerApp',
         htmlmin: {
           collapseBooleanAttributes: true,
           collapseWhitespace: true,
@@ -584,7 +584,7 @@ module.exports = function (grunt) {
 
   grunt.registerTask('build', [
     'clean:dist',
-    'replace:dist',
+    //'replace:dist',
     'injector:less',
     'concurrent:dist',
     'injector',

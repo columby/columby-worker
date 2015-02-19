@@ -273,17 +273,22 @@ FortesWorker.prototype.start = function(job,callback) {
    *
    */
   function handleError(msg){
-    console.log('Error!');
-    console.log(msg);
 
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\',"statusMsg"=\'' + msg+ '\' WHERE id=' + self._job.data.primaryId + ';';
-    self._connection.cms.client(sql,function(err,res){
-      console.log(err);
-      console.log(res);
-    });
+    console.log('___error___');
+    console.log(err);
+    // update Job status
+    var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+ String(err) + '\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql);
+
+    // update Primary status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
 
     self._connection.cms.done(self._connection.cms.client);
     self._connection.data.done(self._connection.data.client);
+
+    callback(err);
   }
 
 };

@@ -7,7 +7,8 @@ var request = require('request'),
   config = require('../config/environment');
 
 
-var ArcgisWorker = module.exports = function(){
+var ArcgisWorker = module.exports = function() {
+
   var self=this;
 
   self._job             = null; 		// job
@@ -23,6 +24,7 @@ var ArcgisWorker = module.exports = function(){
   self._columns         = [];
   self._columnTypes     = [];
   self._geoColumn       = null;     //
+
 };
 
 
@@ -212,6 +214,8 @@ ArcgisWorker.prototype.start = function(job,callback){
 
   function checkBatch(callback) {
     console.log('Checking batch. ');
+    console.log('Batch length: ' + self._batch.length);
+    console.log('Batch in Procress: ' + self._batchInProgress);
     if (!self._tableCreated){
       console.log('Table not yet created, creating table.');
       // Create table
@@ -220,13 +224,14 @@ ArcgisWorker.prototype.start = function(job,callback){
       console.log('Batch not empty and not in progress, let\'s go!');
       processBatch(function(err){
         if (err){
-          handleError(err);}
+          return handleError(err);}
       });
     } else if(self._batch.length === 0){
       console.log('Batch all done');
       finish();
     }
   }
+
 
   function createTable(callback) {
 
@@ -263,7 +268,7 @@ ArcgisWorker.prototype.start = function(job,callback){
       objectIds: self._batch[ 0]
     };
 
-    console.log('params for cilumns: ', params);
+    //console.log('params for cilumns: ', params);
 
     // GET url (for debugging)
     request.get({
@@ -275,7 +280,7 @@ ArcgisWorker.prototype.start = function(job,callback){
         console.log(err);
         return callback('Error getting data for columns.');
       } else {
-        console.log('Data for columns', data);
+        //console.log('Data for columns', data);
         // Process data
         var fields = data.fields;
 
@@ -309,10 +314,10 @@ ArcgisWorker.prototype.start = function(job,callback){
         columnNames.push('the_geom');
         columnTypes.push('geometry');
 
-        columnNames.push('created_at');
-        columnTypes.push('timestamp');
-        columnNames.push('updated_at');
-        columnTypes.push('timestamp');
+        //columnNames.push('created_at');
+        //columnTypes.push('timestamp');
+        //columnNames.push('updated_at');
+        //columnTypes.push('timestamp');
 
         self._columns = columnNames;
         self._columnTypes = columnTypes;
@@ -353,6 +358,7 @@ ArcgisWorker.prototype.start = function(job,callback){
       console.log('Workbatch length: ' + workBatch.length + ', remaining in batch: ' + self._batch.length);
       sendRows(workBatch, function(err){
         if (err){ return callback(err);}
+        self._batchInProgress=false;
         processBatch();
       });
     } else {
@@ -379,7 +385,7 @@ ArcgisWorker.prototype.start = function(job,callback){
       objectIds: rows.join(',')
     };
 
-    console.log(params);
+    //console.log(params);
 
     // GET url (for debugging)
     request.get({
@@ -391,21 +397,24 @@ ArcgisWorker.prototype.start = function(job,callback){
         console.log(err);
         return callback('Error getting data.');
       } else {
-        console.log('data', data);
+        //console.log('data', data);
         // Process data
         data = processGeodata(data);
 
         // build query
         var buildStatement = function(rows) {
+          // flat array of all values; ["a","b","c","d"]
           var params = [];
+          // array with valueClauses per row [ [$1,$2], [$3,$4] ]
           var chunks = [];
-          for(var i = 0; i < 1; i++) {
+          for(var i = 0; i < rows.length; i++) {
+
             var row = rows[ i];
             //console.log(row.length);
             var valuesClause = [];
-            for (var k=0;k<row.length;k++) {
+            for (var k=0;k<rows.length;k++) {
               // parse geometry column (https://github.com/brianc/node-postgres/issues/693)
-              params.push(rows[ k]);
+              params.push(row[ k]);
               var value = '$' + params.length;
               if (k === self._geoColumn) {
                 value = 'ST_GeomFromText(' + value + ', 4326)'
@@ -421,7 +430,7 @@ ArcgisWorker.prototype.start = function(job,callback){
         };
 
         var sql = buildStatement(data);
-        console.log(sql);
+        //console.log(sql);
         self._connection.data.client.query(sql, function(err, result) {
           if (err) {
             console.log(err);
@@ -430,32 +439,12 @@ ArcgisWorker.prototype.start = function(job,callback){
             console.log('inserted ' + data.length + ' rows');
             // if(chunki<self.chunks.length && chunki<self.max_test_chunks){
 
-            checkBatch();
+            return callback();
+            //checkBatch();
           }
         });
       }
     });
-  }
-
-
-  function finish() {
-    console.log('Finished');
-
-    // update Job status
-    var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
-    self._connection.cms.client.query(sql);
-
-    // update Job status
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
-    self._connection.cms.client.query(sql);
-
-
-    self._connection.cms.done(self._connection.cms.client);
-    self._connection.data.done(self._connection.data.client);
-    //self._rl.close();
-
-    callback();
-
   }
 
 
@@ -468,7 +457,6 @@ ArcgisWorker.prototype.start = function(job,callback){
 
     return fields;
   }
-
 
 
   function processGeodata(data){
@@ -503,7 +491,7 @@ ArcgisWorker.prototype.start = function(job,callback){
 
       // get geodata
       if (row.geometry.x && row.geometry.y) {
-        values.push("'POINT(" + row.geometry.x + " " + row.geometry.y + "'");
+        values.push("'POINT(" + row.geometry.x + " " + row.geometry.y + ")'");
       } else if (row.geometry.rings) {
         var points = [];
         row.geometry.rings[ 0].forEach(function(v,k) {
@@ -516,9 +504,9 @@ ArcgisWorker.prototype.start = function(job,callback){
       }
 
       // set dates
-      var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-      values.push(now);  // createdAt
-      values.push(now);  // updatedAt
+      //var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
+      //values.push(now);  // createdAt
+      //values.push(now);  // updatedAt
 
       // add to valueLines
       valueLines.push(values);
@@ -527,12 +515,18 @@ ArcgisWorker.prototype.start = function(job,callback){
     return valueLines;
   }
 
+
   function handleError(err){
     console.log('___error___');
     console.log(err);
     // update Job status
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\' WHERE id=' + self._job.data.primaryId;
+    var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+ String(err) + '\' WHERE id=' + self._job.id;
     self._connection.cms.client.query(sql);
+
+    // update Primary status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
 
     self._connection.cms.done(self._connection.cms.client);
     self._connection.data.done(self._connection.data.client);
@@ -540,6 +534,26 @@ ArcgisWorker.prototype.start = function(job,callback){
     callback(err);
   }
 
+
+  function finish() {
+    console.log('Finished processing the arcgis job');
+
+    // update Job status
+    var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql);
+
+    // update Job status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+    //self._rl.close();
+
+    callback();
+
+  }
 
 
   /*-- helpers --*/
