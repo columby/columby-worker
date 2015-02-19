@@ -200,17 +200,21 @@ Worker.prototype.start = function() {
   function handleProcessedJob(err){
 
     console.log('handling processed job');
-    if (err) {
+    console.log(self._job.data);
 
+    if (err) {
       // update Job status in CMS
       var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+err+'\' WHERE id=' + self._job.id;
       self._connection.client.query(sql);
+      console.log('There was an error', err);
+    } else {
+      // create downloadable file
 
-      console.log('err',err);
     }
 
     self._processing = false;
-    console.log('Processing done for Job ' + self._job.id);
+    console.log('Processing done for Job: ' + self._job.id);
+    console.log('=================================');
   }
 
 };

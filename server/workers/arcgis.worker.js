@@ -10,16 +10,19 @@ var request = require('request'),
 var ArcgisWorker = module.exports = function(){
   var self=this;
 
-  self._job        = null; 			// job
-  self._connection = null;
-  self._total      = null;					// total rows external dataset
-  self._version    = null;				// dataset version
-  self._stats      = null;					// dataset arcgis stats
-  self._batch      = null;					// all dataset ids
-  self._batchSize  = 100;
+  self._job             = null; 		// job
+  self._connection      = null;
+  self._total           = null;			// total rows external dataset
+  self._version         = null;     // dataset version
+  self._stats           = null;			// dataset arcgis stats
+  self._batch           = null;			// all dataset ids
+  self._batchSize       = 100;
   self._objectidpresent = true;
-  self._tablename  = null;
-  self._chunk_size = 100;		// chunk size scrape (rows per cycle)
+  self._tablename       = null;
+  self._chunk_size      = 100;		  // chunk size scrape (rows per cycle)
+  self._columns         = [];
+  self._columnTypes     = [];
+  self._geoColumn       = null;     //
 };
 
 
@@ -146,7 +149,6 @@ ArcgisWorker.prototype.start = function(job,callback){
       } else {
         self._stats = data;
         self._version = data.currentVersion;
-        self._columns = data.fields;
 
         console.log('version', self._version);
 
@@ -192,12 +194,14 @@ ArcgisWorker.prototype.start = function(job,callback){
             console.log(err);
             callback('Error getting object ids.');
           } else {
+            // Sort objectids alphabetically and convert into object
             var data = JSON.parse(data);
             data = data.objectIds;
             data.sort(sortNumber);
+            // Add the object id's to the batch
             self._batch = data;
             console.log('Received ' + data.length + ' objectIds.');
-
+            // Start processing the batch
             checkBatch(callback);
           }
         });
@@ -224,7 +228,8 @@ ArcgisWorker.prototype.start = function(job,callback){
     }
   }
 
-  function createTable(callback){
+  function createTable(callback) {
+
     var esriconvertable = {
       esriFieldTypeSmallInteger : 'TEXT',
       esriFieldTypeInteger  	  : 'TEXT',
@@ -242,55 +247,94 @@ ArcgisWorker.prototype.start = function(job,callback){
       Latitude	  				      : 'TEXT'
     };
 
-    // process each field to get columns
-    var columnNames = [];
-    var columnTypes = [];
+    // Get columns from requests
+    // using ?f=json&pretty=true' returns more columns sometimes, so we make a separate query
+    // Get records
+    var params = {
+      geometryType: 'esriGeometryPoint',
+      spatialRel: 'esriSpatialRelIntersects',
+      where: '1=1',
+      returnCountOnly: 'false',
+      returnIdsOnly: 'false',
+      returnGeometry: 'true',
+      outSR: '4326',
+      outFields: '*',
+      f: 'pjson',
+      objectIds: self._batch[ 0]
+    };
 
-    self._columns.forEach(function(f) {
-      // convert esri types to postgis types
-      var type = esriconvertable[ f.type];
-      var value = f.name;
-      // create column for the type
-      columnNames.push(value);
-      columnTypes.push(type);
-    });
+    console.log('params for cilumns: ', params);
 
-    console.log(columnNames.indexOf('OBJECTID'));
-
-    if (columnNames.indexOf('_objectid') === -1 ) {
-      self._objectidpresent = false;
-      columnNames.push('_objectid');
-      columnTypes.push('TEXT');
-    }
-
-    columnNames = sanitizeColumnNames(columnNames);
-
-    // Add geometry and dates
-    columnNames.push('the_geom');
-    columnTypes.push('geometry');
-    columnNames.push('created_at');
-    columnTypes.push('timestamp');
-    columnNames.push('updated_at');
-    columnTypes.push('timestamp');
-
-    self._columns = columnNames;
-    self._columnTypes = columnTypes;
-
-    // create columns
-    var columns = [];
-    columnNames.forEach(function(v,k){
-      columns.push( v + ' ' + columnTypes[ k]);
-    });
-
-    // create table if not exists
-    var sql = 'CREATE TABLE IF NOT EXISTS ' + self._tablename + ' (cid serial PRIMARY KEY, ' + columns + ')';
-
-    self._connection.data.client.query(sql, function(err, result) {
-      if(err){
-        console.log('error create table if not exist', err);
+    // GET url (for debugging)
+    request.get({
+      url: self._job.data.url + '/query',
+      qs: params,
+      json: true
+    }, function(err,res,data) {
+      if (err) {
+        console.log(err);
+        return callback('Error getting data for columns.');
       } else {
-        self._tableCreated = true;
-        checkBatch();
+        console.log('Data for columns', data);
+        // Process data
+        var fields = data.fields;
+
+        // process each field to get columns
+        var columnNames = [];
+        var columnTypes = [];
+
+        fields.forEach(function (f) {
+          // convert esri types to postgis types
+          var type = esriconvertable[f.type];
+          var value = f.name;
+          // create column for the type
+          columnNames.push(value);
+          columnTypes.push(type);
+        });
+
+        console.log('Column names: ', columnNames);
+        console.log('Column types: ', columnTypes);
+        columnNames = sanitizeColumnNames(columnNames);
+
+        if (columnNames.indexOf('"_objectid"') === -1) {
+          console.log('ObjectId is not present, adding it to the column list.');
+          self._objectidpresent = false;
+          columnNames.push('_objectid');
+          columnTypes.push('TEXT');
+        }
+        console.log('Sanitized columns: ', columnNames);
+
+        // Add geometry and dates
+        self._geoColumn = columnNames.length;
+        columnNames.push('the_geom');
+        columnTypes.push('geometry');
+
+        columnNames.push('created_at');
+        columnTypes.push('timestamp');
+        columnNames.push('updated_at');
+        columnTypes.push('timestamp');
+
+        self._columns = columnNames;
+        self._columnTypes = columnTypes;
+
+        // create columns
+        var columns = [];
+        columnNames.forEach(function (v, k) {
+          columns.push(v + ' ' + columnTypes[k]);
+        });
+
+        // create table if not exists
+        var sql = 'CREATE TABLE IF NOT EXISTS ' + self._tablename + ' (cid serial PRIMARY KEY, ' + columns + ')';
+        console.log('Creating table: ' + sql);
+
+        self._connection.data.client.query(sql, function (err, result) {
+          if (err) {
+            console.log('error create table if not exist', err);
+          } else {
+            self._tableCreated = true;
+            checkBatch();
+          }
+        });
       }
     });
   }
@@ -341,28 +385,32 @@ ArcgisWorker.prototype.start = function(job,callback){
     request.get({
       url: self._job.data.url + '/query',
       qs: params,
-      json:true}, function(err,res,data){
+      json: true
+    }, function(err,res,data){
       if (err) {
         console.log(err);
         return callback('Error getting data.');
       } else {
-
+        console.log('data', data);
         // Process data
         data = processGeodata(data);
 
         // build query
         var buildStatement = function(rows) {
-          console.log('preparing length: ' + rows.length);
-          console.log(self._columns.length);
           var params = [];
           var chunks = [];
           for(var i = 0; i < 1; i++) {
             var row = rows[ i];
-            console.log(row.length);
+            //console.log(row.length);
             var valuesClause = [];
             for (var k=0;k<row.length;k++) {
-              params.push(row[ k]);
-              valuesClause.push('$' + params.length);
+              // parse geometry column (https://github.com/brianc/node-postgres/issues/693)
+              params.push(rows[ k]);
+              var value = '$' + params.length;
+              if (k === self._geoColumn) {
+                value = 'ST_GeomFromText(' + value + ', 4326)'
+              }
+              valuesClause.push(value);
             }
             chunks.push('(' + valuesClause.join(', ') + ')');
           }
@@ -394,8 +442,8 @@ ArcgisWorker.prototype.start = function(job,callback){
     console.log('Finished');
 
     // update Job status
-    //var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
-    //self._connection.cms.client.query(sql);
+    var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql);
 
     // update Job status
     var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
@@ -455,14 +503,14 @@ ArcgisWorker.prototype.start = function(job,callback){
 
       // get geodata
       if (row.geometry.x && row.geometry.y) {
-        values.push("ST_GeomFromText('POINT(" + row.geometry.x + " " + row.geometry.y + "'), 4326)");
+        values.push("'POINT(" + row.geometry.x + " " + row.geometry.y + "'");
       } else if (row.geometry.rings) {
         var points = [];
         row.geometry.rings[ 0].forEach(function(v,k) {
           points.push(v[ 0] + ' ' + v[1]);
         });
         var pointString = points.join(',');
-        values.push("ST_GeomFromText('POLYGON((" + pointString + "))', 4326)");
+        values.push("'POLYGON((" + pointString + "))'");
       } else {
         values.push('null');
       }
@@ -482,6 +530,14 @@ ArcgisWorker.prototype.start = function(job,callback){
   function handleError(err){
     console.log('___error___');
     console.log(err);
+    // update Job status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+
+    callback(err);
   }
 
 
