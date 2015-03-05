@@ -11,3 +11,5 @@ config/settings.js
 /server/config/environment/production.js
 /server/config/local.env.js
 /.tmp/
+
+/dist/
