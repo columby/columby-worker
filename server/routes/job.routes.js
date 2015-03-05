@@ -25,7 +25,6 @@ module.exports = function(app) {
 
   router.delete('/job/:id' , auth.checkJWT, jobCtrl.canManage, jobCtrl.destroy);
 
-
   app.use('/api', router);
 
 };

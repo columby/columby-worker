@@ -4,7 +4,8 @@ var pg = require('pg'),
     settings = require('../config/environment'),
     csvWorker = require('../workers/csv.worker'),
     arcgisWorker = require('../workers/arcgis.worker'),
-    fortesWorker = require('../workers/fortes.worker');
+    fortesWorker = require('../workers/fortes.worker'),
+    request = require('request');
 
 
 var Worker = module.exports = function(config, callback) {
@@ -109,10 +110,11 @@ Worker.prototype.start = function() {
       }
 
       // Determine job type and process it
+      var sql;
       switch(self._job.type){
         case 'csv':
           // get file url
-          var sql=
+          sql=
             'SELECT ' +
               '"Primaries".id AS "primaryId", ' +
               '"Distributions".id AS "distributionId", '+
@@ -141,7 +143,7 @@ Worker.prototype.start = function() {
 
         case 'arcgis':
           // get url
-          var sql=
+          sql=
             'SELECT ' +
               '"Primaries".id AS "primaryId", ' +
               '"Distributions".id AS "distributionId", ' +
@@ -161,8 +163,26 @@ Worker.prototype.start = function() {
           break;
 
         case 'fortes':
-          var fortes = new fortesWorker();
-          fortes.start(self._job, handleProcessedJob);
+          sql=
+            'SELECT ' +
+              '"Primaries".id AS "primaryId", ' +
+              '"Distributions".id AS "distributionId" '+
+            'FROM "Primaries" ' +
+              'LEFT JOIN "Distributions" ' +
+                'ON "Primaries"."distribution_id"="Distributions"."id" ' +
+            'WHERE "Primaries".dataset_id=' + self._job.dataset_id;
+          self._connection.client.query(sql, function(err,result){
+            // Handle error
+            if (err){return handleProcessedJob(err, null);}
+            if ( result.rows[0]) {
+              self._job.data = result.rows[0];
+              var fortes = new fortesWorker();
+              // Start processing
+              fortes.start(self._job, handleProcessedJob);
+            } else {
+              handleProcessedJob('No valid record found. ', null);
+            }
+          });
           break;
 
         default:
@@ -181,17 +201,27 @@ Worker.prototype.start = function() {
   function handleProcessedJob(err){
 
     console.log('handling processed job');
+    console.log(self._job.data);
+
     if (err) {
-
-      // update Job status in CMS
-      var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+err+'\' WHERE id=' + self._job.id;
-      self._connection.client.query(sql);
-
-      console.log('err',err);
+      console.log('There was an error', err);
+      self._processing = false;
+      console.log('Processing done for Job: ' + self._job.id);
+      console.log('=================================');
+    } else {
+      self._processing = false;
+      // create downloadable file
+      request.post({
+        url:'http://localhost:8500/convert',
+        form: {
+          primaryId: self._job.data.primaryId
+        }
+      }, function(err,httpResponse,body) {
+        console.log('Error: ', err);
+        console.log('Processing done for Job: ' + self._job.id);
+        console.log('=================================');
+      });
     }
-
-    self._processing = false;
-    console.log('Processing done for Job ' + self._job.id);
   }
 
 };

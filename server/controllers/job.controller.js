@@ -1,6 +1,7 @@
 'use strict';
 
 var models = require('../models/index');
+var request = require('request');
 
 // Worker is busy
 var processing = false;
@@ -47,8 +48,9 @@ function finish(job){
 
 }
 
-/** -------- HELPER FUNCTIONS -------------------------- **/
 
+
+/** -------- HELPER FUNCTIONS -------------------------- **/
 function validType(type){
   var types=['csv','arcgis','fortes'];
   return (types.indexOf(type) !== -1);
@@ -186,19 +188,19 @@ exports.show = function(req, res) {
  *
  */
 exports.create = function(req, res) {
-
-  if  (!req.body.jobType || !req.body.datasetId) {
+  console.log('Creating job: ', req.body);
+  if  (!req.body.type || !req.body.data.dataset_id) {
     return handleError(res,'Not a valid job object found. ');
   }
 
-  if (!validType(req.body.jobType)){
+  if (!validType(req.body.type)){
     return handleError(res, 'Not a valid job type');
   }
 
   // Get job parameters
   var job = {
-    type: req.body.jobType,
-    dataset_id: req.body.datasetId
+    type: req.body.type,
+    dataset_id: req.body.data.dataset_id
   };
 
   models.Job.create(job).then(function(result){

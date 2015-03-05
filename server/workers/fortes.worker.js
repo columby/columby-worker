@@ -3,132 +3,202 @@
 var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
-  copyFrom = require('pg-copy-streams').from,
-  settings = require('../config/environment');
+  //copyFrom = require('pg-copy-streams').from,
+  config = require('../config/environment');
 
 
-module.exports = function(job,data,done) {
+var FortesWorker = module.exports = function() {
+  var self=this;
 
-  /* ----- Connection to databases ----- */
-  var cmsClient = new pg.Client(settings.db.cms.uri);
-  var dataClient = new pg.Client(settings.db.geo.uri);
-
-
-  /* ----- Variables ----- */
-  var tablename = 'primary_' + data.primary.id;
-  var processedColumns;
-  var processedData;
-
-
-  /* ----- FUNCTIONS ----- */
-  // Connect with database
-  function connect(cb){
-    cmsClient.connect(function(err){
-      if(err){
-        cb(null,err);
-      } else {
-        dataClient.connect(function(err) {
-          if (err) {
-            cb(null,err);
-          } else {
-            cb(true);
-          }
-        })
-      }
-    });
-  }
+  self._tablename = null;
+  self._columns = [];
+  self._batch = [];
+  self._batchInProgress = false;
+  self._batchSize = 50;
+  self._batchedPaused = false;
+  self._tableCreated = false;
+};
 
 
-  function processData(data,cb){
-    // transform into array
-    var dataArray = [];
-    for( var i in data ) {
-      if (data.hasOwnProperty(i)){
-        dataArray.push(data[i]);
-      }
+FortesWorker.prototype.start = function(job,callback) {
+
+  var self = this;
+  self._job = job;
+
+  /**
+   *
+   * Init
+   *
+   */
+  console.log('Starting fortes worker.');
+  connect(function(err){
+    if (err) {
+      handleError('There was an error connecting to the DBs.');
+      return callback(err)
     }
-
-    var result = [];
-
-    // create columns
-    processedColumns = Object.keys(dataArray[ 0]);;
-
-    // create data
-    for (var i=0;i<dataArray.length; i++){
-      var obj = dataArray[ i];
-      var values = [];
-      for (var key in obj) {
-        if (obj.hasOwnProperty(key)) {
-          var val = obj[key];
-          // use val
-          values.push(val);
+    // validate job data
+    validateData(function(err) {
+      if (err) {
+        handleError('There was an error validating the data.');
+        return callback(err)
+      }
+      process(function (err) {
+        if (err) {
+          console.log('There was an error processing the data.', err);
+          handleError('There was an error processing the data.');
+          return callback(err)
         }
-      }
-      result.push(values);
-    }
-    processedData = result;
-    cb(true);
-  }
+        // finish
+        finish(function (err) {
+          if (err) {
+            console.log('There was an error finishing.', err);
+            handleError('There was an error finishing.');
+            return callback(err)
+          }
+          // complete
+          callback(err);
+        });
+      });
+    });
+  });
 
-  // Fetch data
-  function fetchData(cb){
 
-    request.get(settings.fortes.url, {
-      'auth': {
-        'user': settings.fortes.username,
-        'pass': settings.fortes.password,
-        'sendImmediately': false
-      }
-    },function(error, response, body){
-      var data = JSON.parse(body);
-      processData(data, function(res,err){
-        cb(true);
+  /**
+   * Connect to CMS and GEO db
+   *
+   * @param callback
+   */
+  function connect(callback) {
+    self._connection = {};
+    // Connect to cms
+    pg.connect(config.db.cms.uri, function (err, client, done) {
+      if (err) { return callback(err); }
+      console.log('Connected to CMS DB');
+      self._connection.cms = {
+        client: client,
+        done: done
+      };
+      // Connect to postgis
+      pg.connect(config.db.postgis.uri, function (err, client, done) {
+        if (err) { return callback(err); }
+        console.log('Connected to Data DB.');
+        self._connection.data = {
+          client: client,
+          done: done
+        };
+        callback();
       });
     });
   }
 
-  // Delete columby data-table
-  function deleteTable(cb){
-    dataClient.query('DROP TABLE IF EXISTS ' + tablename + ';',function(err, result) {
+
+  /**
+   *
+   * Validate if required elements in job are present.
+   *
+   * @param callback
+   * @returns {*}
+   */
+  function validateData(callback){
+
+    if (!self._job.data.primaryId) {
+      return callback('No primary ID!');
+    }
+
+    self._tablename = 'primary_' + self._job.data.primaryId;
+    console.log('Tablename is ' + self._tablename);
+
+    // Delete columby data-table
+    self._connection.data.client.query('DROP TABLE IF EXISTS ' + self._tablename, function(err, result) {
       if(err) {
-        cb(null,'error create table if not exist.');
-      } else {
-        cb(true);
+        return callback('Error create table if not exist.');
       }
+      console.log('Existing table dropped. ');
+      callback();
     });
   }
 
-  // Create new table
-  function createTable(cb){
-    console.log('Creating table');
-    var columns = processedColumns;
-    columns = columns.join(' TEXT, ');
-    columns += ' TEXT, "createdAt" timestamp, "updatedAt" timestamp';
-    dataClient.query('CREATE TABLE IF NOT EXISTS ' + tablename + ' (cid serial PRIMARY KEY, ' + columns + ');',function(err, result) {
+
+  function process(callback) {
+    request.get(config.fortes.url, {
+      'auth': {
+        'user': config.fortes.username,
+        'pass': config.fortes.password,
+        'sendImmediately': false
+      }
+    },function(err, res, body){
       if (err) {
-        cb(null, err);
-      } else {
-        cb(true);
+        return callback(err);
       }
+      var data = JSON.parse(body);
+      // transform into array
+      var dataArray = [];
+      for( var i in data ) {
+        if (data.hasOwnProperty(i)){
+          dataArray.push(data[i]);
+        }
+      }
+      //console.log(dataArray[ 0]);
+
+      var result = [];
+
+      // create columns
+      self._columns = Object.keys(dataArray[ 0]);
+      console.log('Columns, ', self._columns);
+
+      // create data
+      for (i=0; i<dataArray.length; i++){
+        var obj = dataArray[ i];
+        var values = [];
+        for (var key in obj) {
+          if (obj.hasOwnProperty(key)) {
+            var val = obj[key];
+            // use val
+            values.push(val);
+          }
+        }
+        result.push(values);
+      }
+      self._processedData = result;
+      console.log(self._processedData[ 0]);
+
+      console.log('Creating table');
+      var columns = self._columns.join(' TEXT, ');
+      columns += ' TEXT, "created_at" timestamp, "updated_at" timestamp';
+      var sql='CREATE TABLE IF NOT EXISTS ' + self._tablename + ' (cid serial PRIMARY KEY, ' + columns + ');';
+      self._connection.data.client.query(sql, function(err, result) {
+        if (err) {
+          return callback(err);
+        }
+        console.log('Create table result: ', result);
+
+        insertData(callback);
+      });
+
     });
   }
 
-  // Insert data
-  function insertData(cb){
-    var columns = processedColumns;
-    columns.push('"createdAt"');
-    columns.push('"updatedAt"');
+  /**
+   *
+   * Insert data
+   *
+   */
+  function insertData(callback){
+    console.log('Inserting data. ');
+    var columns = self._columns;
+    columns.push('"created_at"');
+    columns.push('"updated_at"');
     columns = columns.join(', ');
     var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
 
     var valueLines = [];
-    for (var i=0;i<processedData.length;i++){
-      var valueLine = processedData[ i];
+    for (var i=0; i<self._processedData.length;i++){
+      var valueLine = self._processedData[ i];
       valueLine.push(now);
       valueLine.push(now);
       valueLine.forEach(function(value,key){
-        if(!value || value === "") {
-          value = "null";
+        if(!value || value === '') {
+          value = 'null';
         } else {
           value = String(value).replace(/'/g, "''");
           value = "'" + escape(String(value)) + "'";
@@ -140,53 +210,60 @@ module.exports = function(job,data,done) {
     }
     var values = valueLines.join(', ');
 
-    var sql = 'INSERT INTO ' + tablename + ' (' + columns + ') VALUES ' + values + ';';
+    var sql = 'INSERT INTO ' + self._tablename + ' (' + columns + ') VALUES ' + values + ';';
+    //console.log('sql, ', sql);
 
-    dataClient.query(sql, function(err,res){
-      if (err) {
-        cb(null,err);
-      } else {
-        cb(true);
-      }
+    self._connection.data.client.query(sql, function(err){
+      callback(err);
     });
   }
+
+
+
+  ///**
+  // * Create a file from the table
+  // */
+  //function createFile(cb){
+  //
+  //  // copy table to local tmp file
+  //  var stream = dataClient.query(copyFrom('COPY ' + tablename + ' FROM STDIN'));
+  //  var fileStream = fs.createReadStream(tablename + '.csv');
+  //  fileStream.on('error', done);
+  //  fileStream.pipe(stream).on('finish', done).on('error', done);
+  //
+  //  // add to cms (primary)
+  //
+  //  // send to s3
+  //
+  //  // clean up
+  //
+  //}
+
+
 
   /**
-   * Create a file from the table
+   *
+   * Processing finished, update cms and return to main processor.
+   *
    */
-  function createFile(cb){
+  function finish(callback){
 
-    // copy table to local tmp file
-    var stream = dataClient.query(copyFrom('COPY ' + tablename + ' FROM STDIN'));
-    var fileStream = fs.createReadStream(tablename + '.csv');
-    fileStream.on('error', done);
-    fileStream.pipe(stream).on('finish', done).on('error', done);
-
-    // add to cms (primary)
-
-    // send to s3
-
-    // clean up
-
-  }
-
-  // finish
-  function finish(cb){
-    console.log('All is done, closing connection. ');
-
-    // update dataset
+    console.log('Finished');
     var now = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\',"syncDate"=\'' + now + '\' WHERE id=' + data.primary.id + ';';
-    cmsClient.query(sql, function(err,result){
-      if (err){
-        cb(null,err);
-      } else {
-        cmsClient.end();
-        dataClient.end();
-        cb(true);
-      }
-    });
 
+    // update Job status
+    var sql = 'UPDATE "Jobs" SET "status"=\'done\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql, function(err){
+      console.log('e',err);
+      // update Job status
+      sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\', "syncDate"=\'' + now + '\' WHERE id=' + self._job.data.primaryId;
+      self._connection.cms.client.query(sql, function(err){
+        //console.log('ee',err);
+        self._connection.cms.done(self._connection.cms.client);
+        self._connection.data.done(self._connection.data.client);
+        callback();
+      });
+    });
   }
 
 
@@ -194,46 +271,24 @@ module.exports = function(job,data,done) {
    *
    * General error handler
    *
-   * @param err
-   * @param done
    */
-  function handleError(err, done){
-    console.log('Handle error.');
+  function handleError(msg){
+
+    console.log('___error___');
     console.log(err);
-    cmsClient.end();
-    dataClient.end();
+    // update Job status
+    var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+ String(err) + '\' WHERE id=' + self._job.id;
+    self._connection.cms.client.query(sql);
+
+    // update Primary status
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
+    self._connection.cms.client.query(sql);
+
+
+    self._connection.cms.done(self._connection.cms.client);
+    self._connection.data.done(self._connection.data.client);
+
+    callback(err);
   }
 
-
-  /**
-   *
-   * Init
-   *
-   */
-  console.log('Starging fortes worker.');
-  connect(function(res,err){
-    if (err) return handleError(err, done);
-
-    fetchData(function(res,err) {
-      if (err) return handleError(err);
-
-      deleteTable(function(res,err) {
-        if (err) return handleError(err);
-
-        createTable(function(res,err) {
-          if (err) return handleError(err);
-
-          insertData(function(res,err) {
-            if (err) return handleError(err);
-
-            finish(function(res,err) {
-              if (err) return handleError(err);
-              console.log('Done!');
-              done();
-            })
-          })
-        })
-      })
-    })
-  });
 };

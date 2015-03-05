@@ -206,7 +206,7 @@ module.exports = function (grunt) {
             // opens browser on initial server start
             nodemon.on('config:update', function () {
               setTimeout(function () {
-                require('open')('http://localhost:8080/debug?port=5858');
+                require('open')('http://localhost:8080/debug?port=5857');
               }, 500);
             });
           }
@@ -307,7 +307,7 @@ module.exports = function (grunt) {
     ngtemplates: {
       options: {
         // This should be the name of your apps angular module
-        module: 'columbyWorkerApp',
+        module: 'columbyworkerApp',
         htmlmin: {
           collapseBooleanAttributes: true,
           collapseWhitespace: true,
@@ -584,7 +584,7 @@ module.exports = function (grunt) {
 
   grunt.registerTask('build', [
     'clean:dist',
-    'replace:dist',
+    //'replace:dist',
     'injector:less',
     'concurrent:dist',
     'injector',
