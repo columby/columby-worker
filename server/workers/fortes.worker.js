@@ -211,35 +211,12 @@ FortesWorker.prototype.start = function(job,callback) {
     var values = valueLines.join(', ');
 
     var sql = 'INSERT INTO ' + self._tablename + ' (' + columns + ') VALUES ' + values + ';';
-    //console.log('sql, ', sql);
 
+    //console.log('sql, ', sql);
     self._connection.data.client.query(sql, function(err){
       callback(err);
     });
   }
-
-
-
-  ///**
-  // * Create a file from the table
-  // */
-  //function createFile(cb){
-  //
-  //  // copy table to local tmp file
-  //  var stream = dataClient.query(copyFrom('COPY ' + tablename + ' FROM STDIN'));
-  //  var fileStream = fs.createReadStream(tablename + '.csv');
-  //  fileStream.on('error', done);
-  //  fileStream.pipe(stream).on('finish', done).on('error', done);
-  //
-  //  // add to cms (primary)
-  //
-  //  // send to s3
-  //
-  //  // clean up
-  //
-  //}
-
-
 
   /**
    *
@@ -258,7 +235,6 @@ FortesWorker.prototype.start = function(job,callback) {
       // update Job status
       sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\', "syncDate"=\'' + now + '\' WHERE id=' + self._job.data.primaryId;
       self._connection.cms.client.query(sql, function(err){
-        //console.log('ee',err);
         self._connection.cms.done(self._connection.cms.client);
         self._connection.data.done(self._connection.data.client);
         callback();
@@ -274,21 +250,17 @@ FortesWorker.prototype.start = function(job,callback) {
    */
   function handleError(msg){
 
-    console.log('___error___');
-    console.log(err);
-    // update Job status
-    var sql = 'UPDATE "Jobs" SET "status"=\'error\', "error"=\''+ String(err) + '\' WHERE id=' + self._job.id;
-    self._connection.cms.client.query(sql);
+    console.log('Error!');
+    console.log(msg);
 
-    // update Primary status
-    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\' WHERE id=' + self._job.data.primaryId;
-    self._connection.cms.client.query(sql);
-
+    var sql = 'UPDATE "Primaries" SET "jobStatus"=\'error\',"statusMsg"=\'' + msg+ '\' WHERE id=' + self._job.data.primaryId + ';';
+    self._connection.cms.client(sql,function(err,res){
+      console.log(err);
+      console.log(res);
+    });
 
     self._connection.cms.done(self._connection.cms.client);
     self._connection.data.done(self._connection.data.client);
-
-    callback(err);
   }
 
 };

@@ -3,8 +3,7 @@
 angular.module('columbyworkerApp')
 
   .constant('configSrv', {
-
-    apiRoot: '//api.columby.dev/api',
-    version: 'release-1.1'
-
+    apiRoot: '//api.columby.com',
+    version: 'v1.0.2',
+    workerApiRoot: '//worker.columby.com'
   });

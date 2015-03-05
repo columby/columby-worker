@@ -9,11 +9,15 @@
  */
 angular.module('columbyworkerApp')
 
-  .controller('MainController', function ($scope, KueService) {
+  .controller('MainController', function ($scope, WorkerService) {
 
-    KueService.stats().then(function(result){
+    WorkerService.stats().then(function(result){
       $scope.stats = result;
       console.log($scope.stats);
+    });
+
+    WorkerService.jobs().then(function(jobs){
+      $scope.jobs = jobs;
     });
 
   });

@@ -10,39 +10,25 @@ var processing = false;
 
 /** -------- AUTHORIZATION ---------------------------- **/
 exports.canManage =function(req,res,next){
+
   // get user
-
-  // check permission
-
-  next();
+  if (!req.jwt || !req.jwt.sub){
+    return res.status(400).json({status:'Unauthorized.'});
+  }
+  models.User.findOne(req.jwt.sub).then(function(user){
+    // check permission
+    if (user.roles.indexOf('admin')!==-1){
+      next();
+    } else {
+      return res.status(400).json({status:'Unauthorized. Not admin'});
+    }
+  }).catch(function(err){
+    return res.status(400).json({status:'error',msg:err});
+  });
 };
 
 
 
-/** -------- QUEUE FUNCTIONS --------------------------- **/
-function startQueue(){
-  // check if processing
-  if (processing) {
-    return 'Queue is running.';
-  }
-
-  // Check for an active job to process
-  models.Job.findOne({
-      where: {
-        status: 'active'
-        //sort: 'created_at ASC'
-      }
-    }).then(function(job){
-      if (job){
-        console.log('starting job: ' + job.id);
-        startJob(job);
-      } else {
-        return 'No active job found.';
-      }
-    }).catch(function(err){
-      console.log(err);
-    });
-}
 
 function finish(job){
 
@@ -126,24 +112,12 @@ exports.status = function(req,res){
 
 /**
  *
- * Start the job Queue
- *
- */
-exports.start = function(req,res){
-  var start = startQueue();
-
-  return res.json({result: start});
-};
-
-
-/**
- *
  * Get a list of jobs
  *
  */
 exports.index = function(req, res) {
-  var limit = req.query.limit || 100;
-  if (limit>100){ limit=100; }
+  var limit = req.query.limit || 50;
+  if (limit>100){ limit=50; }
   var offset = req.query.offset || 0;
   var filter = {};
   if (req.query.status){
@@ -156,8 +130,9 @@ exports.index = function(req, res) {
     filter.type = req.query.type;
   }
 
-  models.Job.find({
+  models.Job.findAll({
     where: filter,
+    order: 'id DESC',
     offset: offset,
     limit: limit
   }).then(function(jobs){
