@@ -15,8 +15,7 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'development';
  * Dependencies
  */
 var express = require('express'),
-  config = require('./config/environment/index'),
-  Worker = require('./worker/worker');
+  config = require('./config/environment/index');
 
 
 /**
@@ -29,13 +28,15 @@ require('./config/express')(app);
 /**
  * Setup models
  */
-var models = require('./models/index');
+require('./models/index');
 
 /**
  * Setup routes
  */
-var routes = require('./routes/index')(app);
+require('./routes/index')(app);
 
+// Setup the worker class
+var Worker =require('./worker/worker');
 
 /**
  * Start server

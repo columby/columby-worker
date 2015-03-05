@@ -4,7 +4,8 @@ var pg = require('pg'),
     settings = require('../config/environment'),
     csvWorker = require('../workers/csv.worker'),
     arcgisWorker = require('../workers/arcgis.worker'),
-    fortesWorker = require('../workers/fortes.worker');
+    fortesWorker = require('../workers/fortes.worker'),
+    request = require('request');
 
 
 var Worker = module.exports = function(config, callback) {
@@ -204,14 +205,23 @@ Worker.prototype.start = function() {
 
     if (err) {
       console.log('There was an error', err);
+      self._processing = false;
+      console.log('Processing done for Job: ' + self._job.id);
+      console.log('=================================');
     } else {
+      self._processing = false;
       // create downloadable file
-
+      request.post({
+        url:'http://localhost:8500/convert',
+        form: {
+          primaryId: self._job.data.primaryId
+        }
+      }, function(err,httpResponse,body) {
+        console.log('Error: ', err);
+        console.log('Processing done for Job: ' + self._job.id);
+        console.log('=================================');
+      });
     }
-
-    self._processing = false;
-    console.log('Processing done for Job: ' + self._job.id);
-    console.log('=================================');
   }
 
 };

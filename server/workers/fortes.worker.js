@@ -211,7 +211,7 @@ FortesWorker.prototype.start = function(job,callback) {
     var values = valueLines.join(', ');
 
     var sql = 'INSERT INTO ' + self._tablename + ' (' + columns + ') VALUES ' + values + ';';
-    console.log('sql, ', sql);
+    //console.log('sql, ', sql);
 
     self._connection.data.client.query(sql, function(err){
       callback(err);
@@ -258,7 +258,7 @@ FortesWorker.prototype.start = function(job,callback) {
       // update Job status
       sql = 'UPDATE "Primaries" SET "jobStatus"=\'done\', "syncDate"=\'' + now + '\' WHERE id=' + self._job.data.primaryId;
       self._connection.cms.client.query(sql, function(err){
-        console.log('ee',err);
+        //console.log('ee',err);
         self._connection.cms.done(self._connection.cms.client);
         self._connection.data.done(self._connection.data.client);
         callback();

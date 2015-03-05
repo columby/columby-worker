@@ -419,7 +419,7 @@ ArcgisWorker.prototype.start = function(job,callback){
               params.push(row[ k]);
               var value = '$' + params.length;
               if (k === self._geoColumn) {
-                value = 'ST_GeomFromText(' + value + ', 4326)'
+                value = 'ST_GeomFromText(' + value + ', 4326)';
               }
               //
               valuesClause.push(value);
@@ -429,7 +429,7 @@ ArcgisWorker.prototype.start = function(job,callback){
           return {
             text: 'INSERT INTO ' + self._tablename + ' (' + self._columns.join(',') + ') VALUES ' + chunks.join(', '),
             values: params
-          }
+          };
         };
 
         var sql = buildStatement(data);
@@ -467,7 +467,7 @@ ArcgisWorker.prototype.start = function(job,callback){
     // Process data
     if (data.features.length<1) {
       console.log('No features in the data.');
-      return
+      return;
     }
 
     // array for all value rows.
@@ -477,15 +477,20 @@ ArcgisWorker.prototype.start = function(job,callback){
       var row = data.features[ i];
 
       var values = [];
-      for(var k in row.attributes) values.push(row.attributes[ k]);
+      for(var k in row.attributes) {
+        values.push(row.attributes[ k]);
+      }
 
       // add current id if OBJECTID field is missing
-      if(!self._objectidpresent) values.unshift('1');
+      if(!self._objectidpresent) {
+        values.unshift('1');
+      }
 
       // escape string
       values.forEach(function(v,k) {
-        if(!v || v === '') v = 'null';
-        else {
+        if(!v || v === '') {
+          v = 'null';
+        } else {
           //v = String(v).replace(/'/g, '\'\'');
           //v = '\'' + escape(String(v)) + '\'';
         }
@@ -494,14 +499,14 @@ ArcgisWorker.prototype.start = function(job,callback){
 
       // get geodata
       if (row.geometry.x && row.geometry.y) {
-        values.push("POINT(" + row.geometry.x + " " + row.geometry.y + ")");
+        values.push('POINT(' + row.geometry.x + ' ' + row.geometry.y + ')');
       } else if (row.geometry.rings) {
         var points = [];
         row.geometry.rings[ 0].forEach(function(v,k) {
           points.push(v[ 0] + ' ' + v[1]);
         });
         var pointString = points.join(',');
-        values.push("POLYGON((" + pointString + "))");
+        values.push('POLYGON((' + pointString + '))');
       } else {
         values.push('null');
       }

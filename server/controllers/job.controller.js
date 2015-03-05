@@ -1,6 +1,7 @@
 'use strict';
 
 var models = require('../models/index');
+var request = require('request');
 
 // Worker is busy
 var processing = false;
