@@ -15,12 +15,18 @@ exports.canManage =function(req,res,next){
   if (!req.jwt || !req.jwt.sub){
     return res.status(400).json({status:'Unauthorized.'});
   }
-  models.User.findOne(req.jwt.sub).then(function(user){
+  console.log('finding jwt', req.jwt);
+  models.User.find({
+    where: { id: req.jwt.sub}
+  }).then(function(user){
+    if (!user){
+      return res.status(400).json({status:'error',msg:'No user found'});
+    }
     // check permission
-    if (user.roles.indexOf('admin')!==-1){
+    if (user.admin || user.id){
       next();
     } else {
-      return res.status(400).json({status:'Unauthorized. Not admin'});
+      return res.status(400).json({status:'error', msg: 'Unauthorized. Not admin'});
     }
   }).catch(function(err){
     return res.status(400).json({status:'error',msg:err});
