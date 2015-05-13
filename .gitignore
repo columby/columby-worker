@@ -13,3 +13,4 @@ config/settings.js
 /.tmp/
 
 /dist/
+/.DS_Store
