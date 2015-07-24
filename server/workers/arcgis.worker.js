@@ -4,7 +4,7 @@
 var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
-  config = require('../config/environment');
+  config = require('../config/config');
 
 
 var ArcgisWorker = module.exports = function() {
@@ -410,7 +410,7 @@ ArcgisWorker.prototype.start = function(job,callback){
           // Process each row
           for(var i = 0; i < rows.length; i++) {
             var row = rows[ i];
-            console.log('Processing row ' + i + ' with length: ' + row.length);
+            //console.log('Processing row ' + i + ' with length: ' + row.length);
             // container for individual parameters
             var valuesClause = [];
             // Process each element in the row
@@ -464,14 +464,15 @@ ArcgisWorker.prototype.start = function(job,callback){
 
   function processGeodata(data){
 
+    var valueLines = [];
+
     // Process data
     if (data.features.length<1) {
       console.log('No features in the data.');
-      return;
+      return valueLines;
     }
 
     // array for all value rows.
-    var valueLines = [];
     for(var i=0; i<data.features.length; i++){
 
       var row = data.features[ i];
@@ -498,15 +499,19 @@ ArcgisWorker.prototype.start = function(job,callback){
       });
 
       // get geodata
-      if (row.geometry.x && row.geometry.y) {
-        values.push('POINT(' + row.geometry.x + ' ' + row.geometry.y + ')');
-      } else if (row.geometry.rings) {
-        var points = [];
-        row.geometry.rings[ 0].forEach(function(v,k) {
-          points.push(v[ 0] + ' ' + v[1]);
-        });
-        var pointString = points.join(',');
-        values.push('POLYGON((' + pointString + '))');
+      if (row.geometry) {
+        if (row.geometry.x && row.geometry.y) {
+          values.push('POINT(' + row.geometry.x + ' ' + row.geometry.y + ')');
+        } else if (row.geometry.rings) {
+          var points = [];
+          row.geometry.rings[ 0].forEach(function(v,k) {
+            points.push(v[ 0] + ' ' + v[1]);
+          });
+          var pointString = points.join(',');
+          values.push('POLYGON((' + pointString + '))');
+        } else {
+          values.push('null');
+        }
       } else {
         values.push('null');
       }

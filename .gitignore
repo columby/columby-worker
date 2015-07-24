@@ -4,13 +4,8 @@ node_modules/
 /client/bower_components/
 /tmp/
 .DS_Store
-config/settings.js
-
-/server/tmp/
-/server/config/environment/development.js
-/server/config/environment/production.js
-/server/config/local.env.js
 /.tmp/
-
 /dist/
 /.DS_Store
+
+env.js

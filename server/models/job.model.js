@@ -45,7 +45,7 @@ module.exports = function(sequelize, DataTypes) {
       log: {
         type: DataTypes.TEXT
       },
-      dataset_id:{
+      dataset_id: {
         type: DataTypes.INTEGER
       }
     }

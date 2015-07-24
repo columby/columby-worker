@@ -50,4 +50,4 @@ deploy:
 
     - script:
         name: restart forever node process
-        code: ssh -i $PRIVATEKEY_PATH -l $DEPLOY_USER -p $DEPLOY_PORT -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $DEPLOY_HOST "forever stop columby-worker && forever start -l /var/log/columby/worker.columby.com.log -a --sourceDir /home/columby/www/worker.columby.com/dist/server --uid columby-worker app.js"
+        code: ssh -i $PRIVATEKEY_PATH -l $DEPLOY_USER -p $DEPLOY_PORT -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no $DEPLOY_HOST "forever stop columby-worker && forever start -l /var/log/columby/worker/node/columby-worker.log -a  --uid columby-worker /home/columby/www/worker.columby.com/dist/server/app.js"

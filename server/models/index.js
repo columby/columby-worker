@@ -3,7 +3,8 @@
 var fs        = require('fs');
 var path      = require('path');
 var Sequelize = require('sequelize');
-var config    = require('./../config/environment/index');
+var config    = require('./../config/config');
+console.log(config.db.cms);
 
 /**
  *
@@ -19,20 +20,6 @@ var sequelize = new Sequelize(config.db.cms.uri, {
   }
 );
 
-/**
- *
- * Authenticate to the database
- *
- **/
-sequelize
-  .authenticate()
-  .complete(function(err) {
-    if (!!err) {
-      console.log('Unable to connect to the database:', err)
-    } else {
-      console.log('Postgres; Connection has been established successfully.')
-    }
-  });
 
 /**
  *
@@ -42,15 +29,13 @@ sequelize
 var db = {};
 
 
-fs.readdirSync(__dirname)
-  .filter(function(file) {
-    return (file.indexOf(".") !== 0) && (file !== "index.js");
-  })
-  .forEach(function(file) {
-    var model = sequelize["import"](path.join(__dirname, file));
-    console.log('adding ', model.name);
-    db[model.name] = model;
-  });
+fs.readdirSync(__dirname).filter(function(file) {
+  return (file.indexOf(".") !== 0) && (file !== "index.js");
+}).forEach(function(file) {
+  var model = sequelize["import"](path.join(__dirname, file));
+  console.log('adding ', model.name);
+  db[model.name] = model;
+});
 
 
 /**

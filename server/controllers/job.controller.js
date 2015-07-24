@@ -122,21 +122,16 @@ exports.status = function(req,res){
  *
  */
 exports.index = function(req, res) {
-  var limit = req.query.limit || 50;
+  var limit = req.query.limit || 20;
   if (limit>100){ limit=50; }
   var offset = req.query.offset || 0;
   var filter = {};
-  if (req.query.status){
-    filter.status = req.query.status;
-  }
-  if (req.query.datasetId){
-    filter.dataset_id = req.query.datasetId;
-  }
-  if (req.query.type){
-    filter.type = req.query.type;
-  }
 
-  models.Job.findAll({
+  if (req.query.status){ filter.status = req.query.status; }
+  if (req.query.datasetId){ filter.dataset_id = req.query.datasetId; }
+  if (req.query.type){ filter.type = req.query.type; }
+
+  models.Job.findAndCountAll({
     where: filter,
     order: 'id DESC',
     offset: offset,
@@ -146,6 +141,7 @@ exports.index = function(req, res) {
   }).catch(function(err){
     return handleError(res,err);
   });
+  
 };
 
 

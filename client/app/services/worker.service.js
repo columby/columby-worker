@@ -16,12 +16,12 @@ angular.module('columbyworkerApp')
       },
 
       jobs: function(params){
+        console.log(params);
         return $http({
           method: 'get',
           url: '/api/job',
           params: params
         }).then(function(result){
-          console.log('jobs: ', result.data);
           return result.data;
         });
       }

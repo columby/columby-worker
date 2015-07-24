@@ -1,7 +1,7 @@
 'use strict';
 
 var pg = require('pg'),
-    settings = require('../config/environment'),
+    config = require('../config/config'),
     csvWorker = require('../workers/csv.worker'),
     arcgisWorker = require('../workers/arcgis.worker'),
     fortesWorker = require('../workers/fortes.worker'),
@@ -17,8 +17,9 @@ var Worker = module.exports = function(config, callback) {
   self._job          = {};
   self._connection   = {};
 
+  console.log(config);
   // connect to the cms database
-  pg.connect(settings.db.cms.uri, function(err,client,done){
+  pg.connect(config.db.cms.uri, function(err,client,done){
     self._connection = {
       client: client,
       done: done
@@ -154,11 +155,16 @@ Worker.prototype.start = function() {
             'WHERE "Primaries".dataset_id=' + self._job.dataset_id;
           console.log('sql', sql);
           self._connection.client.query(sql, function(err,result){
-            if (err){ return handleProcessedJob(err,null); }
-            if (!result.rows[ 0]){ return handleProcessedJob('No valid record found. ',null); }
-            self._job.data = result.rows[ 0];
-            var arcgis = new arcgisWorker();
-            arcgis.start(self._job, handleProcessedJob);
+            // Return if there was an sql error
+            if (err){
+              return handleProcessedJob(err,null);
+            } else if (!result.rows[ 0]){
+              return handleProcessedJob('No valid record found. ',null);
+            } else {
+              self._job.data = result.rows[ 0];
+              var arcgis = new arcgisWorker();
+              arcgis.start(self._job, handleProcessedJob);
+            }
           });
           break;
 
@@ -205,9 +211,17 @@ Worker.prototype.start = function() {
 
     if (err) {
       console.log('There was an error', err);
-      self._processing = false;
-      console.log('Processing done for Job: ' + self._job.id);
-      console.log('=================================');
+      // set error for this Job
+      console.log('Set error in Job');
+      var sql='UPDATE "Jobs" SET status=$1, error=$2 WHERE id=' + self._job.id;
+      var values = ['error',err];
+      self._connection.client.query({text:sql,values:values}, function(err,result){
+        if (err) { console.log('err',err);}
+        console.log(result);
+        self._processing = false;
+        console.log('Processing done for Job: ' + self._job.id);
+        console.log('=================================');
+      });
     } else {
       self._processing = false;
       // create downloadable file

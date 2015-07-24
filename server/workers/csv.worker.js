@@ -6,7 +6,7 @@ var fs = require('fs'),
   request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
-  config = require('../config/environment'),
+  config = require('../config/config'),
   Baby = require('babyparse');
 
 
@@ -388,4 +388,3 @@ CsvWorker.prototype.sanitizeColumnNames = function(){
 
   return this._columns;
 };
-
