@@ -2,6 +2,7 @@
 
 var models = require('../models/index');
 var request = require('request');
+var console = process.console;
 
 // Worker is busy
 var processing = false;
@@ -10,6 +11,7 @@ var processing = false;
 
 /** -------- AUTHORIZATION ---------------------------- **/
 exports.canManage =function(req,res,next){
+  console.log('checking can manage');
 
   // get user
   if (!req.jwt || !req.jwt.sub){
@@ -141,7 +143,7 @@ exports.index = function(req, res) {
   }).catch(function(err){
     return handleError(res,err);
   });
-  
+
 };
 
 

@@ -7,7 +7,8 @@ var fs = require('fs'),
   pg = require('pg'),
   escape = require('pg-escape'),
   config = require('../config/config'),
-  Baby = require('babyparse');
+  Baby = require('babyparse'),
+  console = process.console;
 
 
 

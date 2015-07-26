@@ -8,22 +8,17 @@ var express = require('express'),
 
 module.exports = function(app) {
 
-  // get job listing
-  router.get('/'       , auth.checkJWT, jobCtrl.home);
-  router.get('/status' , auth.checkJWT, jobCtrl.status);
-  router.get('/stats'  , auth.checkJWT, jobCtrl.stats);
-
   // get specific job
-  router.get('/job'        , auth.checkJWT, jobCtrl.index);
-  router.get('/job/:id'    , auth.checkJWT, jobCtrl.show);
-  router.get('/job/:id/log', auth.checkJWT, jobCtrl.jobLog);
+  router.get('/'        , auth.validateJWT, jobCtrl.index);
+  router.get('/:id'    , auth.validateJWT, jobCtrl.show);
+  router.get('/:id/log', auth.validateJWT, jobCtrl.jobLog);
 
-  router.post('/job'       , auth.checkJWT, jobCtrl.canManage, jobCtrl.create);
+  router.post('/'       , auth.validateJWT, jobCtrl.canManage, jobCtrl.create);
 
-  router.put('/job/:id'    , auth.checkJWT, jobCtrl.canManage, jobCtrl.update);
+  router.put('/:id'    , auth.validateJWT, jobCtrl.canManage, jobCtrl.update);
 
-  router.delete('/job/:id' , auth.checkJWT, jobCtrl.canManage, jobCtrl.destroy);
+  router.delete('/:id' , auth.validateJWT, jobCtrl.canManage, jobCtrl.destroy);
 
-  app.use('/api', router);
+  app.use('/api/job', router);
 
 };

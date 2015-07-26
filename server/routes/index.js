@@ -10,16 +10,15 @@ module.exports = function(app) {
     require('./' + name + '.routes')(app);
   });
 
-  // All undefined asset or api routes should return a 404
-  app.route('/:url(api|auth|components|app|bower_components|assets)/*')
-    .get(function(req,res){
-      return res.json({status: '404'});
-    });
+  // // All undefined asset or api routes should return a 404
+  // app.route('/:url(api|auth|components|app|bower_components|assets)/*')
+  //   .get(function(req,res){
+  //     return res.json({status: '404'});
+  //   });
 
-  // All other routes should redirect to the index.html
+  //All other routes should redirect to the index.html
   app.route('/*')
     .get(function(req,res){
-      return res.json({home: 'Columby Worker',status: '404'});
+      return res.sendStatus(404);
     });
 };
-

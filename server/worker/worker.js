@@ -5,19 +5,21 @@ var pg = require('pg'),
     csvWorker = require('../workers/csv.worker'),
     arcgisWorker = require('../workers/arcgis.worker'),
     fortesWorker = require('../workers/fortes.worker'),
-    request = require('request');
+    request = require('request'),
+    console = process.console;
+
 
 
 var Worker = module.exports = function(config, callback) {
+  console.log('initiating worker.');
   var self=this;
 
-  self._config        = config ? config : {};
+  self._config       = config || {};
   self._processEvery = config.processEvery || '5000';
   self._processing   = false;
   self._job          = {};
-  self._connection   = {};
+  self._connection   = null;
 
-  console.log(config);
   // connect to the cms database
   pg.connect(config.db.cms.uri, function(err,client,done){
     self._connection = {
@@ -34,7 +36,15 @@ var Worker = module.exports = function(config, callback) {
  *
  */
 Worker.prototype.start = function() {
+  console.log('Starting Worker process. ');
   var self=this;
+
+  console.log('Setting process interval: ' + self._processEvery/1000 + ' sec');
+  // start the interval
+  console.log('Starting timer interval.');
+  self._processInterval = setInterval(processJob.bind(self), self._processEvery);
+  process.nextTick(processJob.bind(self));
+  console.log('Worker started. ');
 
   /**
    *
@@ -43,16 +53,11 @@ Worker.prototype.start = function() {
    */
   clearProcessingList(function(){
     console.log('Clean list finished.');
-    console.log('Setting process interval: ' + self._processEvery/1000 + ' sec');
-    self._processInterval = setInterval(processJob.bind(self), self._processEvery);
-    process.nextTick(processJob.bind(self));
-    console.log('Worker started. ');
   });
 
 
   /**
    * Worker was (re)started. Set possible strained jobs to error.
-   * @param cb
    */
   function clearProcessingList(cb){
     // Clear jobs in progress and set them to error state.
@@ -73,6 +78,7 @@ Worker.prototype.start = function() {
    *
    */
   function processJob() {
+    console.log('Process job');
     var self=this;
 
     if (self._processing){
@@ -86,10 +92,7 @@ Worker.prototype.start = function() {
 
     // select the next job in queue
     var sql =
-      'SELECT ' +
-        '* ' +
-      'FROM ' +
-        '"Jobs" ' +
+      'SELECT * FROM "Jobs" ' +
       'WHERE "Jobs"."status"=\'active\' ' +
       'ORDER BY "created_at" DESC ' +
       'LIMIT 1';
@@ -103,9 +106,9 @@ Worker.prototype.start = function() {
 
       // Set the current job
       self._job = result.rows[ 0];
-
       // Return if no job found
       if (!self._job){
+        console.log('No job found for processing. ');
         self._processing=false;
         return;
       }

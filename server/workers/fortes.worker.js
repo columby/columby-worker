@@ -4,7 +4,8 @@ var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
   //copyFrom = require('pg-copy-streams').from,
-  config = require('../config/config');
+  config = require('../config/config'),
+  console = process.console;
 
 
 var FortesWorker = module.exports = function() {

@@ -40,6 +40,10 @@ angular.module('columbyworkerApp')
       $scope.stats = result;
     });
 
+    $scope.changeStatus = function(){
+      console.log('change');
+      console.log($scope.filter);
+    }
 
     $scope.pageChanged = function() {
       console.log('Page changed to: ' + $scope.currentPage);

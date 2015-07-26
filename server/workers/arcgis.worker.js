@@ -4,7 +4,8 @@
 var request = require('request'),
   pg = require('pg'),
   escape = require('pg-escape'),
-  config = require('../config/config');
+  config = require('../config/config'),
+  console = process.console;;
 
 
 var ArcgisWorker = module.exports = function() {

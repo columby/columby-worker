@@ -45,11 +45,10 @@ server.listen(config.port, config.ip, function () {
   console.log('Express server listening on %d, in %s mode', config.port, app.get('env'));
 
   console.log('Connecting worker.');
-  var worker = new Worker(config,function(err){
+  var worker = new Worker(config, function(err){
     if (err) {
       console.log('err', err);
     } else {
-      console.log('Starting worker.');
       worker.start();
     }
   });

@@ -1,4 +1,4 @@
-<div class="container-fluid">
+<div class="container">
   <div class="header">
     <h1>Columby Worker</h1>
     <p>Manage columby worker processes. </p>
@@ -15,13 +15,22 @@
     <h3>Jobs</h3>
 
     <div class="filters">
-      Status
-      <div class="btn-group">
-        <label class="btn btn-primary" ng-model="filter.status.active" btn-radio>active</label>
-        <label class="btn btn-primary" ng-model="filter.status.error" btn-radio>error</label>
-        <label class="btn btn-primary" ng-model="filter.status.complete" btn-radio>complete</label>
+      Show:
+      <div class="checkbox">
+        <label>
+          <input type="checkbox" ng-model="filter.status.active" ng-change="toggleStatus()"> Active (scheduled)
+        </label>
       </div>
-      {{filter.status}}
+      <div class="checkbox">
+        <label>
+          <input type="checkbox" ng-model="filter.status.error" ng-change="toggleStatus()"> Error
+        </label>
+      </div>
+      <div class="checkbox">
+        <label>
+          <input type="checkbox" ng-model="filter.status.complete" ng-change="toggleStatus()"> Complete
+        </label>
+      </div>
     </div>
 
     <table class="table">

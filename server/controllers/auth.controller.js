@@ -5,7 +5,8 @@
  */
 var config = require('../config/config'),
   jwt    = require('jwt-simple'),
-  moment = require('moment');
+  moment = require('moment'),
+  console = process.console;
 
 
 /**
@@ -14,9 +15,9 @@ var config = require('../config/config'),
  * And add the user id to req
  *
  */
-exports.checkJWT = function(req,res,next){
+exports.validateJWT = function(req,res,next){
   console.log('checking jwt');
-  if (!req.user) { req.user={}; }
+  req.jwt = req.jwt || null;
   // Decode the token if present
   if (req.headers.authorization){
     console.log('header', req.headers.authorization);
@@ -33,7 +34,17 @@ exports.checkJWT = function(req,res,next){
       console.log('No user found from token');
     }
     req.jwt = payload;
+  } else {
+    console.log('no authorization header present. ');
+    next();
   }
-
-  next();
 };
+
+
+exports.validateUser = function(req,res,next){
+  console.log('Validating user. ');
+  req.user = req.user || null;
+  console.log(req.user);
+  next();
+
+}
